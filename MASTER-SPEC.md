@@ -87,7 +87,7 @@ Teams increasingly coordinate multiple AI-powered agents (builder, reviewer, spe
 	•	**Spec‑Maintainer**: Updates /specs/*.md and task specs; emits spec.updated and/or changes_requested for structure or scope.
 
 **2.3 Orchestrator Responsibilities**
-	•	Load configuration (orchestrate.yaml), create run state.
+	•	Load configuration (orchestrate.json), create run state.
 	•	Spawn agents via CLI wrappers; connect stdio; log/stdout capture.
 	•	Route *commands* to agents; read *events/heartbeats/logs* from agents.
 	•	Maintain a durable **ledger** of all messages and **receipts** for artifacts.
@@ -375,7 +375,7 @@ For conformance, agents **must** use event:"error" for action-level failures.
 
 **4.1 Typical Run (init → implement → review → compliance → finalize)**
 	1.	**Initialization**
-	•	Orchestrator loads orchestrate.yaml, allocates run_id, creates /state/run.json, and takes a **snapshot** (snap-0007) of the workspace manifest.
+	•	Orchestrator loads orchestrate.json, allocates run_id, creates /state/run.json, and takes a **snapshot** (snap-0007) of the workspace manifest.
 	•	Spawns agent shims (builder, reviewer, compliance, spec‑maintainer), connects stdio, and begins heartbeat supervision.
 	2.	**Implement**
 	•	Router issues command(action=implement) to **builder** with idempotency_key derived from task inputs and snapshot (see §5.4).
@@ -564,49 +564,77 @@ SpecMaint -> Orchestrator: event spec.updated (payload: updated sections)
 	•	Read command NDJSON on stdin.
 	•	Emit heartbeat every heartbeat_interval_s.
 	•	Emit event/log NDJSON to stdout.
-	•	Register the agent in orchestrate.yaml under agents.
+	•	Register the agent in orchestrate.json under agents.
 	•	Provide smoke tests and schema conformance fixtures.
 
 **10.2 Swapping Models/Tools**
 	•	Agent shims wrap any model/tool CLIs. The orchestrator is agnostic to the internals.
 	•	Configuration selects binaries, args, and env per agent.
 
-**10.3 Configuration Format (orchestrate.yaml)**
+**10.3 Configuration Format (orchestrate.json)**
 
 ```
-version: "1.0"
-workspace_root: "."
-tasks:
-  - id: "T-0042"
-    goal: "Implement sections 3.1–3.3 of /specs/MASTER-SPEC.md"
-policy:
-  max_parallel_tasks: 2
-  message_max_bytes: 262144
-  artifact_max_bytes: 1073741824
-  retry:
-    max_attempts: 3
-    backoff: { initial_ms: 1000, max_ms: 60000, multiplier: 2.0, jitter: "full" }
-agents:
-  builder:
-    cmd: ["./agents/builder.sh"]
-    cwd: "."
-    env: { MODEL: "local-llm", LOG_LEVEL: "info" }
-    heartbeat_interval_s: 10
-    timeouts: { implement_s: 600, implement_changes_s: 600 }
-  reviewer:
-    cmd: ["./agents/reviewer.sh"]
-    heartbeat_interval_s: 10
-    timeouts: { review_s: 300 }
-  compliance:
-    cmd: ["./agents/compliance.sh"]
-    timeouts: { compliance_check_s: 300 }
-  spec_maintainer:
-    cmd: ["./agents/spec-maint.sh"]
-feature_flags:
-  - strict_version_pinning
+{
+  "version": "1.0",
+  "workspace_root": ".",
+  "tasks": [
+    {
+      "id": "T-0042",
+      "goal": "Implement sections 3.1–3.3 of /specs/MASTER-SPEC.md"
+    }
+  ],
+  "policy": {
+    "max_parallel_tasks": 2,
+    "message_max_bytes": 262144,
+    "artifact_max_bytes": 1073741824,
+    "retry": {
+      "max_attempts": 3,
+      "backoff": {
+        "initial_ms": 1000,
+        "max_ms": 60000,
+        "multiplier": 2.0,
+        "jitter": "full"
+      }
+    }
+  },
+  "agents": {
+    "builder": {
+      "cmd": ["./agents/builder.sh"],
+      "cwd": ".",
+      "env": {
+        "MODEL": "local-llm",
+        "LOG_LEVEL": "info"
+      },
+      "heartbeat_interval_s": 10,
+      "timeouts": {
+        "implement_s": 600,
+        "implement_changes_s": 600
+      }
+    },
+    "reviewer": {
+      "cmd": ["./agents/reviewer.sh"],
+      "heartbeat_interval_s": 10,
+      "timeouts": {
+        "review_s": 300
+      }
+    },
+    "compliance": {
+      "cmd": ["./agents/compliance.sh"],
+      "timeouts": {
+        "compliance_check_s": 300
+      }
+    },
+    "spec_maintainer": {
+      "cmd": ["./agents/spec-maint.sh"]
+    }
+  },
+  "feature_flags": [
+    "strict_version_pinning",
+    "redact_secrets_in_logs"
+  ]
+}
 
 ```
-  - redact_secrets_in_logs
 
 **10.4 Feature Flags**
 	•	strict_version_pinning: reject events without matching observed_version.
@@ -639,7 +667,7 @@ Task T-0042: Implement sections 3.1–3.3 of /specs/MASTER-SPEC.md.
 │  └─ MASTER-SPEC.md        # missing sections 3.1–3.3
 ├─ src/
 ├─ tests/
-├─ orchestrate.yaml
+├─ orchestrate.json
 └─ state/
 
 ```
@@ -698,7 +726,7 @@ Task T-0042: Implement sections 3.1–3.3 of /specs/MASTER-SPEC.md.
 **12. Operational Behavior**
 
 **12.1 CLI Entry Points**
-	•	orchestrate run --task T-0042 [--config orchestrate.yaml]
+	•	orchestrate run --task T-0042 [--config orchestrate.json]
 	•	orchestrate resume --run <run_id>
 	•	orchestrate validate --schemas (schema linting)
 	•	orchestrate doctor (env & capability checks)
