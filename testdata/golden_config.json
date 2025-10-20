@@ -1,0 +1,66 @@
+{
+  "version": "1.0",
+  "workspace_root": ".",
+  "policy": {
+    "concurrency": 1,
+    "message_max_bytes": 262144,
+    "artifact_max_bytes": 1073741824,
+    "retry": {
+      "max_attempts": 3,
+      "backoff": {
+        "initial_ms": 1000,
+        "max_ms": 60000,
+        "multiplier": 2.0,
+        "jitter": "full"
+      }
+    },
+    "strict_version_pinning": true,
+    "parallel_reviews": false,
+    "redact_secrets_in_logs": true
+  },
+  "agents": {
+    "builder": {
+      "cmd": ["claude"],
+      "heartbeat_interval_s": 10,
+      "timeouts_s": {
+        "implement": 600,
+        "implement_changes": 600
+      },
+      "env": {
+        "CLAUDE_AGENT_ROLE": "builder",
+        "LOG_LEVEL": "info"
+      }
+    },
+    "reviewer": {
+      "cmd": ["claude"],
+      "heartbeat_interval_s": 10,
+      "timeouts_s": {
+        "review": 300
+      },
+      "env": {
+        "CLAUDE_AGENT_ROLE": "reviewer"
+      }
+    },
+    "spec_maintainer": {
+      "cmd": ["claude"],
+      "timeouts_s": {
+        "update_spec": 180
+      },
+      "env": {
+        "CLAUDE_AGENT_ROLE": "spec_maintainer"
+      }
+    },
+    "orchestration": {
+      "enabled": true,
+      "cmd": ["claude"],
+      "timeouts_s": {
+        "intake": 180,
+        "task_discovery": 180
+      },
+      "env": {
+        "CLAUDE_AGENT_ROLE": "orchestration"
+      }
+    }
+  },
+  "tasks": []
+}
