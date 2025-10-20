@@ -1,0 +1,71 @@
+{
+  "responses": {
+    "implement": {
+      "delay_ms": 100,
+      "events": [
+        {
+          "type": "builder.completed",
+          "status": "success",
+          "payload": {
+            "summary": "Implementation completed",
+            "tests": {
+              "status": "pass",
+              "summary": "All tests passed"
+            }
+          }
+        }
+      ]
+    },
+    "implement_changes": {
+      "delay_ms": 100,
+      "events": [
+        {
+          "type": "builder.completed",
+          "status": "success",
+          "payload": {
+            "summary": "Changes implemented based on spec feedback",
+            "tests": {
+              "status": "pass",
+              "summary": "All tests passed after fixes"
+            }
+          }
+        }
+      ]
+    },
+    "review": {
+      "delay_ms": 50,
+      "events": [
+        {
+          "type": "review.completed",
+          "status": "approved",
+          "payload": {
+            "summary": "Changes approved"
+          }
+        }
+      ]
+    },
+    "update_spec": {
+      "delay_ms": 75,
+      "events": [
+        {
+          "type": "spec.changes_requested",
+          "payload": {
+            "summary": "Implementation needs adjustments per spec requirements",
+            "required_changes": [
+              "Add error handling for edge case X",
+              "Update documentation for function Y"
+            ]
+          },
+          "artifacts": [
+            {
+              "path": "spec_notes/T-TEST-SPEC-NOTES.json",
+              "sha256": "sha256:spec123notes456spec123notes456spec123notes456spec123notes456spec12",
+              "size": 512
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "comment": "Note: This fixture only emits spec.changes_requested once. On second update_spec call, mockagent will use default behavior (spec.updated)"
+}

@@ -183,6 +183,71 @@ func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, goal string)
 	return nil
 }
 
+// detectMidSpecLoop checks if the ledger shows we're in the middle of a spec loop
+// Returns (true, event_type) if the last spec-related event was spec.changes_requested
+// without subsequent completion of the implement/review cycle
+func (s *Scheduler) detectMidSpecLoop(lg *ledger.Ledger, taskID string) (bool, string) {
+	// Find the most recent spec-related event for this task
+	var lastSpecEvent *protocol.Event
+	for i := len(lg.Events) - 1; i >= 0; i-- {
+		evt := lg.Events[i]
+		if evt.TaskID != taskID {
+			continue
+		}
+
+		// Check for spec-related events
+		if evt.Event == protocol.EventSpecChangesRequested ||
+			evt.Event == protocol.EventSpecUpdated ||
+			evt.Event == protocol.EventSpecNoChangesNeeded {
+			lastSpecEvent = evt
+			break
+		}
+	}
+
+	// If no spec events, we're not in mid-loop
+	if lastSpecEvent == nil {
+		return false, ""
+	}
+
+	// If the last spec event was spec.changes_requested, check if the subsequent
+	// implement_changes/review cycle was completed
+	if lastSpecEvent.Event == protocol.EventSpecChangesRequested {
+		// Look for implement_changes and review.completed after this spec event
+		foundImplementChanges := false
+		foundReviewApproved := false
+
+		for _, evt := range lg.Events {
+			if evt.TaskID != taskID {
+				continue
+			}
+
+			// Only look at events after the spec.changes_requested
+			if evt.OccurredAt.Before(lastSpecEvent.OccurredAt) {
+				continue
+			}
+
+			// Check for builder.completed from implement_changes
+			if evt.Event == protocol.EventBuilderCompleted {
+				foundImplementChanges = true
+			}
+
+			// Check for review.completed with approved status
+			if evt.Event == protocol.EventReviewCompleted && evt.Status == protocol.ReviewStatusApproved {
+				foundReviewApproved = true
+			}
+		}
+
+		// If we haven't completed the implement/review cycle after spec.changes_requested,
+		// we're in mid-spec-loop
+		if !foundImplementChanges || !foundReviewApproved {
+			return true, protocol.EventSpecChangesRequested
+		}
+	}
+
+	// Otherwise, we're not in mid-loop
+	return false, ""
+}
+
 // ResumeTask continues a task from where it left off by checking the ledger
 // Only commands that don't have terminal events will be executed
 func (s *Scheduler) ResumeTask(ctx context.Context, taskID string, goal string, lg *ledger.Ledger) error {
@@ -254,19 +319,75 @@ func (s *Scheduler) ResumeTask(ctx context.Context, taskID string, goal string, 
 		}
 	}
 
-	// Check if spec maintenance step is complete
-	specComplete := false
-	for _, cmd := range lg.Commands {
-		if cmd.TaskID == taskID && cmd.Action == protocol.ActionUpdateSpec {
-			if _, hasTerminal := terminals[cmd.MessageID]; hasTerminal {
-				specComplete = true
-				s.logger.Info("spec maintenance step already complete, skipping", "task_id", taskID)
+	// Stage 3: Spec Maintenance - enhanced for granular resume per P1.4-ANSWERS A5
+	// Check if we're in mid-spec-loop (spec.changes_requested was the last spec event)
+	inMidSpecLoop, lastSpecEvent := s.detectMidSpecLoop(lg, taskID)
+	s.logger.Info("mid-spec-loop detection",
+		"in_mid_loop", inMidSpecLoop,
+		"last_spec_event", lastSpecEvent,
+		"task_id", taskID)
+
+	if inMidSpecLoop {
+		s.logger.Info("detected mid-spec-loop resume after spec.changes_requested",
+			"task_id", taskID,
+			"last_spec_event", lastSpecEvent)
+
+		// Resume spec loop from implement_changes per P1.4-ANSWERS A5
+		s.logger.Info("resuming spec loop: implement changes", "task_id", taskID)
+		if err := s.executeImplementChanges(ctx, taskID); err != nil {
+			return fmt.Errorf("implement_changes (spec loop resume) failed: %w", err)
+		}
+
+		// Re-review after changes
+		s.logger.Info("resuming spec loop: review", "task_id", taskID)
+		for {
+			reviewResult, err := s.executeReview(ctx, taskID)
+			if err != nil {
+				return fmt.Errorf("review (spec loop resume) failed: %w", err)
+			}
+
+			if reviewResult == protocol.ReviewStatusApproved {
 				break
+			}
+
+			s.logger.Info("changes requested in spec loop resume, fixing", "task_id", taskID)
+			if err := s.executeImplementChanges(ctx, taskID); err != nil {
+				return fmt.Errorf("implement_changes (spec loop resume review) failed: %w", err)
+			}
+		}
+
+		// After completing mid-spec-loop work, we MUST run update_spec again
+		// (don't check specComplete - we just finished the iteration that was triggered by spec.changes_requested)
+		s.logger.Info("mid-spec-loop work complete, continuing to update_spec", "task_id", taskID)
+	}
+
+	// Check if spec maintenance step is complete
+	// NOTE: Skip this check if we just handled mid-spec-loop (we need to run update_spec again)
+	specComplete := false
+	if !inMidSpecLoop {
+		for _, cmd := range lg.Commands {
+			if cmd.TaskID == taskID && cmd.Action == protocol.ActionUpdateSpec {
+				if _, hasTerminal := terminals[cmd.MessageID]; hasTerminal {
+					// Check if the terminal event is truly final (spec.updated or spec.no_changes_needed)
+					// If it's spec.changes_requested, we already handled it above with inMidSpecLoop
+					for _, evt := range lg.Events {
+						if evt.CorrelationID == cmd.CorrelationID {
+							if evt.Event == protocol.EventSpecUpdated || evt.Event == protocol.EventSpecNoChangesNeeded {
+								specComplete = true
+								s.logger.Info("spec maintenance truly complete", "final_event", evt.Event, "task_id", taskID)
+								break
+							}
+						}
+					}
+					if specComplete {
+						break
+					}
+				}
 			}
 		}
 	}
 
-	// Stage 3: Spec Maintenance (if not complete)
+	// Continue spec maintenance loop (if not complete)
 	if !specComplete {
 		s.logger.Info("stage: spec maintenance (resuming)", "task_id", taskID)
 		for {
@@ -355,6 +476,74 @@ func (s *Scheduler) writeReceipt() error {
 	return nil
 }
 
+// validateBuilderTestResults validates builder.completed events per PLAN.md P1.4
+// Per P1.4-ANSWERS A2: missing/invalid tests → task failure with clear error
+func (s *Scheduler) validateBuilderTestResults(evt *protocol.Event) error {
+	// Extract tests payload from event
+	testsRaw, ok := evt.Payload["tests"]
+	if !ok {
+		return fmt.Errorf("builder.completed missing required 'tests' payload (task_id: %s, message_id: %s)",
+			evt.TaskID, evt.MessageID)
+	}
+
+	// Validate tests is a map
+	testsMap, ok := testsRaw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("builder.completed 'tests' payload must be an object, got %T (task_id: %s)",
+			testsRaw, evt.TaskID)
+	}
+
+	// Extract and validate status field (required per P1.4-ANSWERS A4)
+	statusRaw, ok := testsMap["status"]
+	if !ok {
+		return fmt.Errorf("builder.completed 'tests' payload missing required 'status' field (task_id: %s)",
+			evt.TaskID)
+	}
+
+	status, ok := statusRaw.(string)
+	if !ok {
+		return fmt.Errorf("builder.completed 'tests.status' must be a string, got %T (task_id: %s)",
+			statusRaw, evt.TaskID)
+	}
+
+	// Check if tests passed
+	if status == "pass" {
+		s.logger.Info("builder tests passed", "task_id", evt.TaskID, "summary", testsMap["summary"])
+		return nil
+	}
+
+	// Tests failed - check for allowed_failures per P1.4-ANSWERS A1
+	if status == "fail" {
+		allowedRaw, hasAllowed := testsMap["allowed_failures"]
+		allowed, _ := allowedRaw.(bool)
+
+		if hasAllowed && allowed {
+			// Failures are allowed - log warning but accept
+			s.logger.Warn("builder tests failed but allowed_failures=true",
+				"task_id", evt.TaskID,
+				"summary", testsMap["summary"],
+				"note", "Run continues with known test failures")
+			return nil
+		}
+
+		// Failures not allowed - reject
+		summary := "no summary provided"
+		if summaryRaw, ok := testsMap["summary"]; ok {
+			if summaryStr, ok := summaryRaw.(string); ok {
+				summary = summaryStr
+			}
+		}
+		return fmt.Errorf("builder tests failed (task_id: %s): %s", evt.TaskID, summary)
+	}
+
+	// Unknown status - log warning but accept (forward compatible per P1.4-ANSWERS A4)
+	s.logger.Warn("builder tests reported unknown status",
+		"task_id", evt.TaskID,
+		"status", status,
+		"note", "Treating as pass for forward compatibility")
+	return nil
+}
+
 func (s *Scheduler) executeImplement(ctx context.Context, taskID string, goal string) error {
 	cmd := s.makeCommand(
 		taskID,
@@ -367,8 +556,14 @@ func (s *Scheduler) executeImplement(ctx context.Context, taskID string, goal st
 		return err
 	}
 
-	if err := s.waitForEvent(ctx, s.builder, protocol.EventBuilderCompleted, taskID); err != nil {
+	evt, err := s.waitForEventReturn(ctx, s.builder, protocol.EventBuilderCompleted, taskID)
+	if err != nil {
 		return err
+	}
+
+	// Validate builder test results per PLAN.md P1.4 and MASTER-SPEC §14.2
+	if err := s.validateBuilderTestResults(evt); err != nil {
+		return fmt.Errorf("builder test validation failed: %w", err)
 	}
 
 	// Write receipt after successful completion
@@ -391,8 +586,14 @@ func (s *Scheduler) executeImplementChanges(ctx context.Context, taskID string) 
 		return err
 	}
 
-	if err := s.waitForEvent(ctx, s.builder, protocol.EventBuilderCompleted, taskID); err != nil {
+	evt, err := s.waitForEventReturn(ctx, s.builder, protocol.EventBuilderCompleted, taskID)
+	if err != nil {
 		return err
+	}
+
+	// Validate builder test results per PLAN.md P1.4 and MASTER-SPEC §14.2
+	if err := s.validateBuilderTestResults(evt); err != nil {
+		return fmt.Errorf("builder test validation failed: %w", err)
 	}
 
 	// Write receipt after successful completion

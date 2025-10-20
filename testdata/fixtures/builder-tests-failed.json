@@ -1,0 +1,23 @@
+{
+  "responses": {
+    "implement": {
+      "delay_ms": 100,
+      "events": [
+        {
+          "type": "builder.completed",
+          "status": "success",
+          "payload": {
+            "summary": "Implementation completed but tests failed",
+            "tests": {
+              "status": "fail",
+              "summary": "2 of 10 tests failed",
+              "total": 10,
+              "passed": 8,
+              "failed": 2
+            }
+          }
+        }
+      ]
+    }
+  }
+}

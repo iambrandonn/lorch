@@ -448,3 +448,413 @@ func TestSchedulerIdempotencyKeyGeneration(t *testing.T) {
 		t.Errorf("Snapshot ID = %s, want snap-different", cmd5.Version.SnapshotID)
 	}
 }
+
+// TestSchedulerBuilderMissingTests verifies scheduler rejects builder.completed without tests payload
+func TestSchedulerBuilderMissingTests(t *testing.T) {
+	mockAgentPath, err := buildMockAgent(t)
+	if err != nil {
+		t.Fatalf("failed to build mock agent: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create builder with script that omits tests payload
+	scriptPath := "../../testdata/fixtures/builder-missing-tests.json"
+	builder := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeBuilder,
+		[]string{mockAgentPath, "-type", "builder", "-no-heartbeat", "-script", scriptPath},
+		map[string]string{},
+		logger,
+	)
+
+	reviewer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeReviewer,
+		[]string{mockAgentPath, "-type", "reviewer", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	specMaintainer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeSpecMaintainer,
+		[]string{mockAgentPath, "-type", "spec_maintainer", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Start all agents
+	if err := builder.Start(ctx); err != nil {
+		t.Fatalf("failed to start builder: %v", err)
+	}
+	defer builder.Stop(context.Background())
+
+	if err := reviewer.Start(ctx); err != nil {
+		t.Fatalf("failed to start reviewer: %v", err)
+	}
+	defer reviewer.Stop(context.Background())
+
+	if err := specMaintainer.Start(ctx); err != nil {
+		t.Fatalf("failed to start spec maintainer: %v", err)
+	}
+	defer specMaintainer.Stop(context.Background())
+
+	// Create scheduler
+	scheduler := NewScheduler(builder, reviewer, specMaintainer, logger)
+
+	// Execute task - should fail
+	taskID := "T-TEST-MISSING-TESTS"
+	goal := "test missing tests payload"
+
+	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	if err == nil {
+		t.Fatal("Expected ExecuteTask to fail with missing tests payload, but it succeeded")
+	}
+
+	// Verify error message mentions missing tests
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "tests") {
+		t.Errorf("Error message should mention 'tests', got: %s", errMsg)
+	}
+}
+
+// TestSchedulerBuilderInvalidTests verifies scheduler rejects builder.completed with invalid tests payload
+func TestSchedulerBuilderInvalidTests(t *testing.T) {
+	mockAgentPath, err := buildMockAgent(t)
+	if err != nil {
+		t.Fatalf("failed to build mock agent: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create builder with script that has tests payload missing status field
+	scriptPath := "../../testdata/fixtures/builder-invalid-tests.json"
+	builder := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeBuilder,
+		[]string{mockAgentPath, "-type", "builder", "-no-heartbeat", "-script", scriptPath},
+		map[string]string{},
+		logger,
+	)
+
+	reviewer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeReviewer,
+		[]string{mockAgentPath, "-type", "reviewer", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	specMaintainer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeSpecMaintainer,
+		[]string{mockAgentPath, "-type", "spec_maintainer", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Start all agents
+	if err := builder.Start(ctx); err != nil {
+		t.Fatalf("failed to start builder: %v", err)
+	}
+	defer builder.Stop(context.Background())
+
+	if err := reviewer.Start(ctx); err != nil {
+		t.Fatalf("failed to start reviewer: %v", err)
+	}
+	defer reviewer.Stop(context.Background())
+
+	if err := specMaintainer.Start(ctx); err != nil {
+		t.Fatalf("failed to start spec maintainer: %v", err)
+	}
+	defer specMaintainer.Stop(context.Background())
+
+	// Create scheduler
+	scheduler := NewScheduler(builder, reviewer, specMaintainer, logger)
+
+	// Execute task - should fail
+	taskID := "T-TEST-INVALID-TESTS"
+	goal := "test invalid tests payload"
+
+	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	if err == nil {
+		t.Fatal("Expected ExecuteTask to fail with invalid tests payload, but it succeeded")
+	}
+
+	// Verify error message mentions status field
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "status") {
+		t.Errorf("Error message should mention 'status', got: %s", errMsg)
+	}
+}
+
+// TestSchedulerBuilderTestsFailed verifies scheduler rejects builder.completed with failing tests
+func TestSchedulerBuilderTestsFailed(t *testing.T) {
+	mockAgentPath, err := buildMockAgent(t)
+	if err != nil {
+		t.Fatalf("failed to build mock agent: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create builder with script that reports failing tests
+	scriptPath := "../../testdata/fixtures/builder-tests-failed.json"
+	builder := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeBuilder,
+		[]string{mockAgentPath, "-type", "builder", "-no-heartbeat", "-script", scriptPath},
+		map[string]string{},
+		logger,
+	)
+
+	reviewer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeReviewer,
+		[]string{mockAgentPath, "-type", "reviewer", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	specMaintainer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeSpecMaintainer,
+		[]string{mockAgentPath, "-type", "spec_maintainer", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Start all agents
+	if err := builder.Start(ctx); err != nil {
+		t.Fatalf("failed to start builder: %v", err)
+	}
+	defer builder.Stop(context.Background())
+
+	if err := reviewer.Start(ctx); err != nil {
+		t.Fatalf("failed to start reviewer: %v", err)
+	}
+	defer reviewer.Stop(context.Background())
+
+	if err := specMaintainer.Start(ctx); err != nil {
+		t.Fatalf("failed to start spec maintainer: %v", err)
+	}
+	defer specMaintainer.Stop(context.Background())
+
+	// Create scheduler
+	scheduler := NewScheduler(builder, reviewer, specMaintainer, logger)
+
+	// Execute task - should fail
+	taskID := "T-TEST-TESTS-FAILED"
+	goal := "test failed tests"
+
+	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	if err == nil {
+		t.Fatal("Expected ExecuteTask to fail with failing tests, but it succeeded")
+	}
+
+	// Verify error message mentions test failure
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "fail") {
+		t.Errorf("Error message should mention test 'fail', got: %s", errMsg)
+	}
+}
+
+// TestSchedulerBuilderTestsFailedAllowed verifies scheduler accepts builder.completed with allowed_failures
+func TestSchedulerBuilderTestsFailedAllowed(t *testing.T) {
+	mockAgentPath, err := buildMockAgent(t)
+	if err != nil {
+		t.Fatalf("failed to build mock agent: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create builder with script that reports failing tests with allowed_failures: true
+	scriptPath := "../../testdata/fixtures/builder-tests-failed-allowed.json"
+	builder := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeBuilder,
+		[]string{mockAgentPath, "-type", "builder", "-no-heartbeat", "-script", scriptPath},
+		map[string]string{},
+		logger,
+	)
+
+	reviewer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeReviewer,
+		[]string{mockAgentPath, "-type", "reviewer", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	specMaintainer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeSpecMaintainer,
+		[]string{mockAgentPath, "-type", "spec_maintainer", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Start all agents
+	if err := builder.Start(ctx); err != nil {
+		t.Fatalf("failed to start builder: %v", err)
+	}
+	defer builder.Stop(context.Background())
+
+	if err := reviewer.Start(ctx); err != nil {
+		t.Fatalf("failed to start reviewer: %v", err)
+	}
+	defer reviewer.Stop(context.Background())
+
+	if err := specMaintainer.Start(ctx); err != nil {
+		t.Fatalf("failed to start spec maintainer: %v", err)
+	}
+	defer specMaintainer.Stop(context.Background())
+
+	// Create scheduler
+	scheduler := NewScheduler(builder, reviewer, specMaintainer, logger)
+
+	// Track events to verify warning is logged
+	var events []*protocol.Event
+	scheduler.SetEventHandler(func(evt *protocol.Event) {
+		events = append(events, evt)
+		t.Logf("Event: %s (status: %s, payload: %+v)", evt.Event, evt.Status, evt.Payload)
+	})
+
+	// Execute task - should succeed despite failing tests due to allowed_failures
+	taskID := "T-TEST-TESTS-FAILED-ALLOWED"
+	goal := "test failed tests with allowed failures"
+
+	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	if err != nil {
+		t.Fatalf("ExecuteTask failed unexpectedly: %v", err)
+	}
+
+	// Verify we got builder.completed event
+	var gotBuilderCompleted bool
+	for _, evt := range events {
+		if evt.Event == protocol.EventBuilderCompleted {
+			gotBuilderCompleted = true
+			// Verify tests payload has allowed_failures
+			if testsRaw, ok := evt.Payload["tests"]; ok {
+				if testsMap, ok := testsRaw.(map[string]any); ok {
+					if allowed, ok := testsMap["allowed_failures"]; !ok || allowed != true {
+						t.Error("Expected allowed_failures: true in tests payload")
+					}
+				}
+			}
+			break
+		}
+	}
+	if !gotBuilderCompleted {
+		t.Error("did not receive builder.completed event")
+	}
+}
+
+// TestSchedulerSpecNotesArtifacts verifies spec.changes_requested includes spec_notes artifact
+func TestSchedulerSpecNotesArtifacts(t *testing.T) {
+	mockAgentPath, err := buildMockAgent(t)
+	if err != nil {
+		t.Fatalf("failed to build mock agent: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Use simple-success script for builder/reviewer
+	builder := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeBuilder,
+		[]string{mockAgentPath, "-type", "builder", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	reviewer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeReviewer,
+		[]string{mockAgentPath, "-type", "reviewer", "-no-heartbeat"},
+		map[string]string{},
+		logger,
+	)
+
+	// Use script that emits spec.changes_requested with spec_notes artifact
+	scriptPath := "../../testdata/fixtures/spec-changes-requested.json"
+	specMaintainer := supervisor.NewAgentSupervisor(
+		protocol.AgentTypeSpecMaintainer,
+		[]string{mockAgentPath, "-type", "spec_maintainer", "-no-heartbeat", "-script", scriptPath},
+		map[string]string{},
+		logger,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Start all agents
+	if err := builder.Start(ctx); err != nil {
+		t.Fatalf("failed to start builder: %v", err)
+	}
+	defer builder.Stop(context.Background())
+
+	if err := reviewer.Start(ctx); err != nil {
+		t.Fatalf("failed to start reviewer: %v", err)
+	}
+	defer reviewer.Stop(context.Background())
+
+	if err := specMaintainer.Start(ctx); err != nil {
+		t.Fatalf("failed to start spec maintainer: %v", err)
+	}
+	defer specMaintainer.Stop(context.Background())
+
+	// Create scheduler with temporary workspace for receipts
+	scheduler := NewScheduler(builder, reviewer, specMaintainer, logger)
+	scheduler.SetWorkspaceRoot(t.TempDir())
+	scheduler.SetSnapshotID("snap-test-spec-notes")
+
+	// Track events
+	var events []*protocol.Event
+	scheduler.SetEventHandler(func(evt *protocol.Event) {
+		events = append(events, evt)
+		t.Logf("Event: %s (status: %s, artifacts: %d)", evt.Event, evt.Status, len(evt.Artifacts))
+	})
+
+	// Execute task - will go through: implement → review → spec.changes_requested → implement_changes → review → update_spec
+	taskID := "T-TEST-SPEC-NOTES"
+	goal := "test spec notes artifacts"
+
+	// The task will fail at spec.changes_requested, but that's expected for this test
+	// We're testing the first iteration where spec.changes_requested is emitted
+	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	// Note: This will actually succeed because the fixture includes implement_changes/review responses
+	if err != nil {
+		t.Logf("Task execution error (expected for spec loop): %v", err)
+	}
+
+	// Find the spec.changes_requested event
+	var specChangesEvent *protocol.Event
+	for _, evt := range events {
+		if evt.Event == protocol.EventSpecChangesRequested {
+			specChangesEvent = evt
+			break
+		}
+	}
+
+	if specChangesEvent == nil {
+		t.Fatal("Expected spec.changes_requested event, but did not receive it")
+	}
+
+	// Verify spec.changes_requested has artifacts (spec_notes)
+	if len(specChangesEvent.Artifacts) == 0 {
+		t.Error("spec.changes_requested should include spec_notes artifact")
+	}
+
+	// Verify artifact path is spec_notes/<task>.json
+	foundSpecNotes := false
+	for _, artifact := range specChangesEvent.Artifacts {
+		if strings.Contains(artifact.Path, "spec_notes/") && strings.HasSuffix(artifact.Path, ".json") {
+			foundSpecNotes = true
+			t.Logf("Found spec_notes artifact: %s (%d bytes)", artifact.Path, artifact.Size)
+			break
+		}
+	}
+
+	if !foundSpecNotes {
+		t.Error("spec.changes_requested artifact should be in spec_notes/ directory")
+	}
+}

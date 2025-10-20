@@ -1,0 +1,19 @@
+{
+  "responses": {
+    "implement": {
+      "delay_ms": 100,
+      "events": [
+        {
+          "type": "builder.completed",
+          "status": "success",
+          "payload": {
+            "summary": "Implementation completed",
+            "tests": {
+              "summary": "Tests payload missing required status field"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "responses": {
+    "implement": {
+      "delay_ms": 100,
+      "events": [
+        {
+          "type": "builder.completed",
+          "status": "success",
+          "payload": {
+            "summary": "Implementation completed with known flaky tests",
+            "tests": {
+              "status": "fail",
+              "summary": "2 of 10 tests failed (known flaky)",
+              "total": 10,
+              "passed": 8,
+              "failed": 2,
+              "allowed_failures": true
+            }
+          }
+        }
+      ]
+    },
+    "implement_changes": {
+      "delay_ms": 100,
+      "events": [
+        {
+          "type": "builder.completed",
+          "status": "success",
+          "payload": {
+            "summary": "Changes implemented",
+            "tests": {
+              "status": "pass",
+              "summary": "All tests passed"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

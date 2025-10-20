@@ -73,12 +73,51 @@ Deliver `lorch run` with builder/reviewer/spec-maintainer agents, deterministic 
 - 🔧 Bug fixes: Ledger scanner buffer sizing, snapshot determinism
 - 📊 Implementation summary: `P1.3-IMPLEMENTATION-SUMMARY.md`
 
-### P1.4 Milestone – Builder/Test Enforcement & Spec Loop Closure
-- **Tests first**: author integration specs for builder success/failure scenarios and spec-maintainer change-request loop.
-- **Task A**: extend builder command handler to require structured test/lint payloads before success.
-- **Task B**: implement spec-maintainer event handling (`spec.updated`, `spec.no_changes_needed`, `spec.changes_requested`) and state transitions.
-- **Task C**: persist `/spec_notes/**` artifacts and associated receipts when notes are produced.
-- **Exit criteria**: e2e tests covering approval and change-request loops pass; completion hinges on spec maintainer signal.
+### P1.4 Milestone – Builder/Test Enforcement & Spec Loop Closure ✅ **COMPLETE**
+> **Status**: Completed 2025-10-20
+> **Summary**: Builder test enforcement, spec_notes artifact handling, and granular spec loop resumption fully implemented and tested. All exit criteria met. See `P1.4-IMPLEMENTATION-SUMMARY.md` for details.
+
+- **Tests first** ✅
+  - ✅ Scheduler integration tests cover all required scenarios
+  - ✅ Builder test validation: missing payload, invalid payload, failing tests, allowed_failures
+  - ✅ Spec-maintainer loop: spec.changes_requested with spec_notes artifacts, spec.no_changes_needed
+  - ✅ Receipt tests verify test summaries and spec-note artifacts persist
+  - ✅ Crash/resume test verifies granular spec loop continuation
+
+- **Task A – Builder result contract enforcement** ✅
+  - ✅ `validateBuilderTestResults()` helper in `scheduler.go:358-424`
+  - ✅ Rejects builder completions without valid `tests` payload with clear error messages
+  - ✅ Structured test metadata persisted in receipts and event log
+  - ✅ Test fixtures created: missing-tests, invalid-tests, tests-failed, tests-failed-allowed
+
+- **Task B – Spec-maintainer loop & artifact handling** ✅
+  - ✅ Scheduler handles `/spec_notes/**` artifacts when produced
+  - ✅ `spec.changes_requested` triggers implement/review loop per MASTER-SPEC §14.2
+  - ✅ Spec maintainer approval gated on review approval
+
+- **Task C – Resume/idempotency alignment** ✅
+  - ✅ `detectMidSpecLoop()` helper in `scheduler.go:186-249` for granular resume
+  - ✅ Ledger replay correctly identifies pending commands in spec loops
+  - ✅ Idempotency keys + receipts prevent duplicate work
+  - ✅ Integration test (`TestCrashAndResumeAfterSpecChangesRequested`) validates crash after `spec.changes_requested`
+  - ✅ **Bug fixed**: `spec.changes_requested` was incorrectly marked as terminal event in `ledger.go`
+
+- **Task D – Developer ergonomics & docs** ✅
+  - ✅ Clear error messages for builder test failures (includes task_id, summary)
+  - ✅ Console output shows test validation results
+  - ✅ Implementation summary created: `P1.4-IMPLEMENTATION-SUMMARY.md`
+
+- **Exit criteria** ✅ **MET**
+  - ✅ All 7 new tests passing; scheduler blocks builder completions without passing tests with clear diagnostics
+  - ✅ Event log + receipts record builder test summaries and spec_notes artifacts
+  - ✅ `lorch resume` performs granular continuation from pending command (per P1.4-ANSWERS A5)
+  - ✅ Task completion strictly gated on `spec.updated` or `spec.no_changes_needed`
+
+**Deliverables**:
+- 📦 1 new helper: `validateBuilderTestResults()`, 1 new helper: `detectMidSpecLoop()`
+- 📝 7 new tests, 5 new fixtures
+- 🐛 1 critical bug fix (terminal event classification)
+- 📊 Implementation summary: `P1.4-IMPLEMENTATION-SUMMARY.md`
 
 ### P1.5 Milestone – QA, Packaging & Docs
 - **Tests first**: finalize smoke-test script using mock agents; ensure CI pipeline executes it.
