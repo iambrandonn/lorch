@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/iambrandonn/lorch/schemas/v1/receipt.v1.json",
+  "title": "Receipt",
+  "description": "A receipt recording completed work for a command",
+  "type": "object",
+  "required": [
+    "task_id",
+    "step",
+    "action",
+    "idempotency_key",
+    "snapshot_id",
+    "command_message_id",
+    "correlation_id",
+    "artifacts",
+    "events",
+    "created_at"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^T-[0-9]{4}$",
+      "description": "Task identifier (e.g., T-0042)"
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Step number within the task workflow"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "implement",
+        "implement_changes",
+        "review",
+        "update_spec",
+        "intake",
+        "task_discovery"
+      ],
+      "description": "Action that was performed"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^ik:[a-f0-9]{64}$",
+      "description": "Idempotency key of the command that produced this work"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^snap-[a-f0-9]{12}$",
+      "description": "Snapshot ID the work was performed against"
+    },
+    "command_message_id": {
+      "type": "string",
+      "pattern": "^cmd-[a-f0-9]{8}$",
+      "description": "Message ID of the originating command"
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Correlation ID linking command and events"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "size"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Artifact file path relative to workspace"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "description": "SHA256 checksum of artifact"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Artifact size in bytes"
+          }
+        }
+      },
+      "description": "Artifacts produced by this command"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^evt-[a-f0-9]{8}$"
+      },
+      "description": "List of event message IDs associated with this work"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp when receipt was created"
+    }
+  },
+  "additionalProperties": false
+}

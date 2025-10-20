@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/iambrandonn/lorch/schemas/v1/log.v1.json",
+  "title": "Log",
+  "description": "A diagnostic log message from an agent",
+  "type": "object",
+  "required": [
+    "kind",
+    "level",
+    "message",
+    "timestamp"
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "log",
+      "description": "Message envelope type"
+    },
+    "level": {
+      "type": "string",
+      "enum": ["info", "warn", "error"],
+      "description": "Log severity level"
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable log message"
+    },
+    "fields": {
+      "type": "object",
+      "description": "Optional structured log fields (key-value pairs)"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp when log was generated"
+    }
+  },
+  "additionalProperties": false
+}

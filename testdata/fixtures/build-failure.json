@@ -1,0 +1,25 @@
+{
+  "responses": {
+    "implement": {
+      "delay_ms": 200,
+      "events": [
+        {
+          "type": "builder.progress",
+          "payload": {
+            "stage": "compiling",
+            "progress": 0.5
+          }
+        },
+        {
+          "type": "error",
+          "payload": {
+            "error": "compilation failed",
+            "details": "undefined: someFunction",
+            "file": "src/main.go",
+            "line": 42
+          }
+        }
+      ]
+    }
+  }
+}

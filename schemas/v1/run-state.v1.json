@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/iambrandonn/lorch/schemas/v1/run-state.v1.json",
+  "title": "Run State",
+  "description": "Persistent state tracking the progress of an orchestration run",
+  "type": "object",
+  "required": [
+    "run_id",
+    "status",
+    "task_id",
+    "snapshot_id",
+    "current_stage",
+    "started_at"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "pattern": "^run-[0-9]{8}-[0-9]{6}-[a-f0-9]{8}$",
+      "description": "Unique run identifier (format: run-YYYYMMDD-HHMMSS-<uuid>)"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "completed", "failed", "aborted"],
+      "description": "Overall run status"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^T-[0-9]{4}$",
+      "description": "Task being executed (e.g., T-0042)"
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Optional correlation ID for tracking"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^snap-[a-f0-9]{12}$",
+      "description": "Snapshot ID pinning workspace version for this run"
+    },
+    "current_stage": {
+      "type": "string",
+      "enum": ["implement", "review", "spec_maintain", "complete"],
+      "description": "Current execution stage"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp when run started"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp when run completed (if status is completed/failed/aborted)"
+    },
+    "last_command_id": {
+      "type": "string",
+      "pattern": "^cmd-[a-f0-9]{8}$",
+      "description": "Message ID of last command sent"
+    },
+    "last_event_id": {
+      "type": "string",
+      "pattern": "^evt-[a-f0-9]{8}$",
+      "description": "Message ID of last event received"
+    },
+    "terminal_events": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "description": "Terminal event type (e.g., 'builder.completed')"
+      },
+      "description": "Map of agent type to terminal event type received"
+    }
+  },
+  "additionalProperties": false
+}

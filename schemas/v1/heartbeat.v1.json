@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/iambrandonn/lorch/schemas/v1/heartbeat.v1.json",
+  "title": "Heartbeat",
+  "description": "A heartbeat message sent from an agent to indicate liveness",
+  "type": "object",
+  "required": [
+    "kind",
+    "agent",
+    "seq",
+    "status",
+    "pid",
+    "uptime_s",
+    "last_activity_at"
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "heartbeat",
+      "description": "Message envelope type"
+    },
+    "agent": {
+      "type": "object",
+      "required": ["agent_type"],
+      "properties": {
+        "agent_type": {
+          "type": "string",
+          "enum": ["builder", "reviewer", "spec_maintainer", "orchestration", "system"],
+          "description": "Agent role"
+        },
+        "agent_id": {
+          "type": "string",
+          "description": "Optional specific agent instance ID"
+        }
+      },
+      "description": "Agent reference"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonically increasing sequence number"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["starting", "ready", "busy", "stopping", "backoff"],
+      "description": "Agent health status"
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Process ID of the agent"
+    },
+    "ppid": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Parent process ID (optional)"
+    },
+    "uptime_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Agent uptime in seconds"
+    },
+    "last_activity_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp of last activity"
+    },
+    "stats": {
+      "type": "object",
+      "properties": {
+        "cpu_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "CPU usage percentage"
+        },
+        "rss_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Resident set size in bytes"
+        }
+      },
+      "description": "Optional resource usage statistics"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^T-[0-9]{4}$",
+      "description": "Current task being processed (optional)"
+    }
+  },
+  "additionalProperties": false
+}

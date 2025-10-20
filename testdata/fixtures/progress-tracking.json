@@ -1,0 +1,63 @@
+{
+  "responses": {
+    "implement": {
+      "delay_ms": 500,
+      "events": [
+        {
+          "type": "builder.progress",
+          "payload": {
+            "stage": "planning",
+            "progress": 0.2,
+            "message": "Analyzing requirements"
+          }
+        },
+        {
+          "type": "builder.progress",
+          "payload": {
+            "stage": "implementing",
+            "progress": 0.5,
+            "message": "Writing code"
+          }
+        },
+        {
+          "type": "builder.progress",
+          "payload": {
+            "stage": "testing",
+            "progress": 0.8,
+            "message": "Running tests"
+          }
+        },
+        {
+          "type": "builder.completed",
+          "status": "success",
+          "payload": {
+            "summary": "Implementation completed with 3 files",
+            "tests": {
+              "status": "pass",
+              "total": 15,
+              "passed": 15,
+              "failed": 0
+            }
+          },
+          "artifacts": [
+            {
+              "path": "src/auth.go",
+              "sha256": "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+              "size": 2048
+            },
+            {
+              "path": "src/auth_test.go",
+              "sha256": "sha256:def456abc123def456abc123def456abc123def456abc123def456abc123defa",
+              "size": 3072
+            },
+            {
+              "path": "src/middleware.go",
+              "sha256": "sha256:123abc456def123abc456def123abc456def123abc456def123abc456def1234",
+              "size": 1536
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

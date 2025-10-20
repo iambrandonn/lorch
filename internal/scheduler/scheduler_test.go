@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -366,4 +367,84 @@ func buildMockAgent(t *testing.T) (string, error) {
 	}
 
 	return mockAgentPath, nil
+}
+
+func TestSchedulerIdempotencyKeyGeneration(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create scheduler with minimal setup (no actual agents needed for this test)
+	scheduler := NewScheduler(nil, nil, nil, logger)
+	scheduler.SetSnapshotID("snap-test123")
+
+	// Create two commands with same parameters
+	cmd1 := scheduler.makeCommand(
+		"T-0042",
+		protocol.AgentTypeBuilder,
+		protocol.ActionImplement,
+		map[string]any{"goal": "test goal"},
+	)
+
+	cmd2 := scheduler.makeCommand(
+		"T-0042",
+		protocol.AgentTypeBuilder,
+		protocol.ActionImplement,
+		map[string]any{"goal": "test goal"},
+	)
+
+	// Verify IK format
+	if !strings.HasPrefix(cmd1.IdempotencyKey, "ik:") {
+		t.Errorf("IK should start with 'ik:', got: %s", cmd1.IdempotencyKey)
+	}
+
+	if len(cmd1.IdempotencyKey) != 67 { // "ik:" (3) + 64 hex chars
+		t.Errorf("IK length = %d, want 67", len(cmd1.IdempotencyKey))
+	}
+
+	// IKs should be identical for same inputs
+	if cmd1.IdempotencyKey != cmd2.IdempotencyKey {
+		t.Errorf("IKs should be identical for same inputs:\n  %s\n  %s",
+			cmd1.IdempotencyKey, cmd2.IdempotencyKey)
+	}
+
+	// Different action should produce different IK
+	cmd3 := scheduler.makeCommand(
+		"T-0042",
+		protocol.AgentTypeBuilder,
+		protocol.ActionImplementChanges,
+		map[string]any{"goal": "test goal"},
+	)
+
+	if cmd1.IdempotencyKey == cmd3.IdempotencyKey {
+		t.Error("Different actions should produce different IKs")
+	}
+
+	// Different inputs should produce different IK
+	cmd4 := scheduler.makeCommand(
+		"T-0042",
+		protocol.AgentTypeBuilder,
+		protocol.ActionImplement,
+		map[string]any{"goal": "different goal"},
+	)
+
+	if cmd1.IdempotencyKey == cmd4.IdempotencyKey {
+		t.Error("Different inputs should produce different IKs")
+	}
+
+	// Different snapshot should produce different IK
+	scheduler.SetSnapshotID("snap-different")
+	cmd5 := scheduler.makeCommand(
+		"T-0042",
+		protocol.AgentTypeBuilder,
+		protocol.ActionImplement,
+		map[string]any{"goal": "test goal"},
+	)
+
+	if cmd1.IdempotencyKey == cmd5.IdempotencyKey {
+		t.Error("Different snapshots should produce different IKs")
+	}
+
+	// Verify snapshot ID is set correctly
+	if cmd5.Version.SnapshotID != "snap-different" {
+		t.Errorf("Snapshot ID = %s, want snap-different", cmd5.Version.SnapshotID)
+	}
 }

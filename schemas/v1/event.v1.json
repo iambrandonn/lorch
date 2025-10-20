@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/iambrandonn/lorch/schemas/v1/event.v1.json",
+  "title": "Event",
+  "description": "An event message sent from an agent to lorch orchestrator",
+  "type": "object",
+  "required": [
+    "kind",
+    "message_id",
+    "correlation_id",
+    "task_id",
+    "from",
+    "event",
+    "payload",
+    "occurred_at"
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "event",
+      "description": "Message envelope type"
+    },
+    "message_id": {
+      "type": "string",
+      "pattern": "^evt-[a-f0-9]{8}$",
+      "description": "Unique identifier for this event message"
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Correlation ID linking to originating command"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^T-[0-9]{4}$",
+      "description": "Task identifier (e.g., T-0042)"
+    },
+    "from": {
+      "type": "object",
+      "required": ["agent_type"],
+      "properties": {
+        "agent_type": {
+          "type": "string",
+          "enum": ["builder", "reviewer", "spec_maintainer", "orchestration", "system"],
+          "description": "Source agent role"
+        },
+        "agent_id": {
+          "type": "string",
+          "description": "Optional specific agent instance ID"
+        }
+      },
+      "description": "Source agent reference"
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "builder.progress",
+        "builder.completed",
+        "review.completed",
+        "spec.updated",
+        "spec.no_changes_needed",
+        "spec.changes_requested",
+        "orchestration.proposed_tasks",
+        "orchestration.needs_clarification",
+        "orchestration.plan_conflict",
+        "artifact.produced",
+        "error",
+        "system.user_decision"
+      ],
+      "description": "Event type identifier"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["approved", "changes_requested"],
+      "description": "Optional status field (used in review events)"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event-specific payload data"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "size"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Artifact file path relative to workspace"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "description": "SHA256 checksum of artifact"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Artifact size in bytes"
+          }
+        }
+      },
+      "description": "Artifacts produced by this event"
+    },
+    "observed_version": {
+      "type": "object",
+      "required": ["snapshot_id"],
+      "properties": {
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^snap-[a-f0-9]{12}$",
+          "description": "Snapshot ID the agent observed"
+        },
+        "specs_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "Optional hash of specs/ directory"
+        },
+        "code_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "Optional hash of src/ directory"
+        }
+      },
+      "description": "Version information observed by agent"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp when event occurred"
+    }
+  },
+  "additionalProperties": false
+}

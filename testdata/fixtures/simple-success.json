@@ -1,0 +1,61 @@
+{
+  "responses": {
+    "implement": {
+      "delay_ms": 100,
+      "events": [
+        {
+          "type": "builder.completed",
+          "status": "success",
+          "payload": {
+            "summary": "Implementation completed successfully",
+            "tests": {
+              "status": "pass",
+              "summary": "All tests passed"
+            }
+          },
+          "artifacts": [
+            {
+              "path": "src/feature.go",
+              "sha256": "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+              "size": 2048
+            }
+          ]
+        }
+      ]
+    },
+    "review": {
+      "delay_ms": 50,
+      "events": [
+        {
+          "type": "review.completed",
+          "status": "approved",
+          "payload": {
+            "summary": "Changes look good",
+            "approved": true
+          }
+        }
+      ]
+    },
+    "update_spec": {
+      "delay_ms": 75,
+      "events": [
+        {
+          "type": "spec.updated",
+          "payload": {
+            "summary": "Spec updated successfully",
+            "changes": [
+              "Updated feature documentation"
+            ]
+          },
+          "artifacts": [
+            {
+              "path": "specs/SPEC.md",
+              "sha256": "sha256:def789abc012def789abc012def789abc012def789abc012def789abc012defa",
+              "size": 4096
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

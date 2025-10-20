@@ -11,28 +11,67 @@
 ## Phase 1 – Core Orchestrator Foundation
 Deliver `lorch run` with builder/reviewer/spec-maintainer agents, deterministic persistence, and resumable runs.
 
-### P1.1 Milestone – Workspace & CLI Skeleton
+### P1.1 Milestone – Workspace & CLI Skeleton ✅ **COMPLETE**
 - **Tests first**: define unit specs for config generation/validation and golden snapshot for default `lorch.json`.
-- **Task A**: scaffold Go module (`go mod init`), create `cmd/lorch` entrypoint with subcommands (`lorch`, `lorch run`, `lorch resume`).
-- **Task B**: implement bootstrap flow to detect/create workspace directories (`state/`, `events/`, `receipts/`, `logs/`, etc.).
-- **Task C**: implement config loader/auto-generator matching defaults (Claude agents, policy settings).
-- **Task D**: add validation layer (struct tags or JSON schema) with user-friendly errors.
-- **Exit criteria**: tests from step one pass, CLI can initialize a fresh workspace, `lorch.json` matches expected golden file.
+- **Task A**: scaffold Go module (`go mod init`), create `cmd/lorch` entrypoint with subcommands (`lorch`, `lorch run`, `lorch resume`). ✅
+- **Task B**: implement bootstrap flow to detect/create workspace directories (`state/`, `events/`, `receipts/`, `logs/`, etc.). ✅
+- **Task C**: implement config loader/auto-generator matching defaults (Claude agents, policy settings). ✅
+- **Task D**: add validation layer (struct tags or JSON schema) with user-friendly errors. ✅
+- **Exit criteria** ✅: tests from step one pass, CLI can initialize a fresh workspace, `lorch.json` matches expected golden file.
 
-### P1.2 Milestone – Agent Supervisor & IPC Core
+### P1.2 Milestone – Agent Supervisor & IPC Core ✅ **COMPLETE**
 - **Tests first**: craft mock-agent harness specs (echo NDJSON, heartbeat simulation) and scheduler sequencing tests.
-- **Task A**: implement agent registry with subprocess lifecycle management (start/stop, restart hooks).
-- **Task B**: build NDJSON framing utilities (encoder/decoder, size enforcement, structured logging).
-- **Task C**: implement single-agent scheduler enforcing Implement → Review → Spec Maintenance order with back-pressure.
-- **Task D**: pipe transcripts to console and persist raw streams to `/events/<run>.ndjson`.
-- **Exit criteria**: mock-agent tests pass; transcripts and event logs show correct sequencing.
+- **Task A**: implement agent registry with subprocess lifecycle management (start/stop, restart hooks). ✅
+- **Task B**: build NDJSON framing utilities (encoder/decoder, size enforcement, structured logging). ✅
+- **Task C**: implement single-agent scheduler enforcing Implement → Review → Spec Maintenance order with back-pressure. ✅
+- **Task D**: pipe transcripts to console and persist raw streams to `/events/<run>.ndjson`. ✅
+- **Exit criteria** ✅: mock-agent tests pass; transcripts and event logs show correct sequencing.
 
-### P1.3 Milestone – Idempotency & Persistence
-- **Tests first**: specify unit tests for idempotency key generation and ledger append; integration scenario covering crash/restart.
-- **Task A**: implement IK generator and append-only ledger writer with checksum validation.
-- **Task B**: implement artifact receipt pipelines (atomic writes, checksum hashing, directory layout).
-- **Task C**: add resume logic loading `/state/run.json`, replaying ledger, resending commands with same IKs.
-- **Exit criteria**: crash/restart simulation passes; receipts written to expected paths with verified hashes.
+### P1.3 Milestone – Idempotency & Persistence ✅ **COMPLETE**
+> **Status**: Completed 2025-10-20
+> **Summary**: Full implementation of idempotency keys, workspace snapshots, event ledger, run state persistence, and crash recovery via `lorch resume`. All core functionality tested and working end-to-end.
+
+- **Tests first** ✅
+  - Unit tests for canonical command hashing → deterministic idempotency keys.
+  - Ledger append/replay tests (including checksum verification and out-of-order rejection).
+  - Receipt-writing golden tests (JSON structure, checksum fields, atomic write behaviour).
+  - Integration test simulating crash/restart with mock agents (re-run command with same IK, ensure no duplicates).
+- **Task A – Idempotency Key Generator & Snapshot Metadata** ✅
+  - Implement snapshot capture stub (record `snapshot_id`, placeholder hashes) invoked at run start.
+  - Build canonical serialization + SHA256 hashing to derive IK per command (action/task/snapshot/inputs).
+  - Persist snapshot metadata to `/snapshots/snap-XXXX.manifest.json` (minimal schema for now).
+  - **Delivered**: `internal/idempotency`, `internal/snapshot`, `internal/checksum` packages with full test coverage.
+- **Task B – Ledger Writer & Event Persistence** ✅
+  - Extend event logging to append commands/events/heartbeats to `/events/<run>.ndjson` with metadata entries (timestamp, IK, checksum) as per spec §5.
+  - Ensure append-only semantics, verify writes with checksum/hmac when reading.
+  - Implement ledger reader that can reconstruct in-flight state on resume.
+  - **Delivered**: `internal/ledger` package with replay logic and 256 KiB message support.
+- **Task C – Receipt Pipeline** ✅
+  - Write receipts to `/receipts/<task>/<step>.json` capturing artifacts, IK, message IDs.
+  - Use atomic write pattern (tmp file + fsync + rename) and include SHA256 of artifact payloads (use `crypto/sha256`).
+  - Add helper to compute file checksums for verification.
+  - **Delivered**: `internal/receipt` and `internal/fsutil` packages with atomic write utilities.
+- **Task D – Resume & Crash Recovery** ✅
+  - Implement `/state/run.json` tracking run status, current stage, last message IDs.
+  - On `lorch resume --run <id>`, reload state, replay ledger, send pending commands with original IKs.
+  - Add crash simulation test: start run, stop mid-flight, restart via resume, ensure no duplicate work and consistent transcripts/ledger.
+  - **Delivered**: `internal/runstate` package, `lorch resume` command, crash/restart integration tests.
+- **Task E – CLI Wiring & Regression Harness** ✅
+  - Wire `lorch run` to instantiate scheduler + supervisors, attach event logger/transcript formatter, and kick off Phase 1 pipeline using real components.
+  - Provide flag/option to run with mock agents for local smoke tests (optional dev tool).
+  - Update documentation (`README`, PLAN next steps) to reflect runnable path.
+  - **Delivered**: Fully integrated `lorch run` command with snapshot capture, IK generation, and persistence.
+- **Exit criteria** ✅ **MET**
+  - All new tests (unit + crash/restart integration) pass. ✅ (~30 new tests, all passing)
+  - Running `lorch run` produces event log, receipts, and snapshot metadata; resuming after simulated crash succeeds without duplicate work. ✅ (Verified end-to-end)
+  - CLI transcripts/event logs align with spec formatting and content. ✅ (Matches MASTER-SPEC §5)
+
+**Additional Deliverables**:
+- 📦 7 new packages: `checksum`, `fsutil`, `idempotency`, `snapshot`, `receipt`, `ledger`, `runstate`
+- 📝 Documentation: `docs/IDEMPOTENCY.md`, `docs/RESUME.md`
+- 🧪 Test coverage: ~1,500 lines of test code across all packages
+- 🔧 Bug fixes: Ledger scanner buffer sizing, snapshot determinism
+- 📊 Implementation summary: `P1.3-IMPLEMENTATION-SUMMARY.md`
 
 ### P1.4 Milestone – Builder/Test Enforcement & Spec Loop Closure
 - **Tests first**: author integration specs for builder success/failure scenarios and spec-maintainer change-request loop.
@@ -95,6 +134,20 @@ Improve diagnostics, recovery, and human control.
   - Plan for optional logging verbosity, trace IDs, and hooks for future analytics (without violating local-first goals).
 
 ## Next Steps
-1. Break Phase 1 milestones into discrete issues/tasks (owners, sequencing, estimates) using sections P1.1–P1.5.
-2. Define the agent shim interface: CLI contract, prompt templating, stdout/stderr expectations, and local testing scaffold.
-3. Set up Go tooling & CI skeleton (module init, lint/test workflows) before starting P1.1 implementation.
+✅ ~~1. Decompose P1.3 tasks (A–E) into implementation issues with clear dependencies and owners.~~ **DONE**
+✅ ~~2. Finalize snapshot/ledger schemas (JSON shapes) and document them for reference before coding Task A/B.~~ **DONE**
+✅ ~~3. Prepare crash/restart test harness (mock agent scripts, test data directories) to support Task D integration tests.~~ **DONE**
+
+### Current Status (2025-10-20)
+**Phase 1.3 Complete**: All core idempotency and persistence functionality is implemented and tested. The orchestrator can now:
+- Capture workspace snapshots with deterministic IDs
+- Generate idempotency keys for crash recovery
+- Persist run state and event ledgers
+- Resume interrupted runs without duplicate work
+- Handle crashes gracefully with full state recovery
+
+**Remaining P1.3 Supplements** (optional enhancements):
+- JSON schemas for validation (`schemas/v1/*.json`)
+- Mock agent script support (`mockagent --script fixture.json`)
+
+**Ready for P1.4**: Builder/Test Enforcement & Spec Loop Closure

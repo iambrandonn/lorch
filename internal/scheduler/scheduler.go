@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/iambrandonn/lorch/internal/idempotency"
+	"github.com/iambrandonn/lorch/internal/ledger"
 	"github.com/iambrandonn/lorch/internal/protocol"
+	"github.com/iambrandonn/lorch/internal/receipt"
 	"github.com/iambrandonn/lorch/internal/supervisor"
 )
 
@@ -42,13 +46,26 @@ type Scheduler struct {
 	specMaintainer *supervisor.AgentSupervisor
 	logger         *slog.Logger
 
+	// Snapshot ID for version pinning
+	snapshotID string
+
+	// Workspace root for receipt writing
+	workspaceRoot string
+
+	// Step counter for receipts
+	stepCounter int
+
 	// Event handlers
-	onEvent func(*protocol.Event)
+	onEvent     func(*protocol.Event)
 	onHeartbeat func(*protocol.Heartbeat)
 
 	// Optional logging/formatting (for CLI integration)
 	eventLog   EventLogger
 	transcript TranscriptFormatter
+
+	// Tracking for current command execution
+	currentCommand *protocol.Command
+	currentEvents  []*protocol.Event
 }
 
 // NewScheduler creates a new scheduler
@@ -86,23 +103,30 @@ func (s *Scheduler) SetTranscriptFormatter(formatter TranscriptFormatter) {
 	s.transcript = formatter
 }
 
+// SetSnapshotID sets the snapshot ID for version pinning
+func (s *Scheduler) SetSnapshotID(snapshotID string) {
+	s.snapshotID = snapshotID
+}
+
+// SetWorkspaceRoot sets the workspace root for receipt writing
+func (s *Scheduler) SetWorkspaceRoot(workspaceRoot string) {
+	s.workspaceRoot = workspaceRoot
+}
+
 // ExecuteTask runs the full Implement → Review → Spec Maintenance flow
 func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, goal string) error {
 	s.logger.Info("starting task execution", "task_id", taskID, "goal", goal)
 
-	// Generate correlation ID for this execution
-	correlationID := fmt.Sprintf("corr-%s-%s", taskID, uuid.New().String()[:8])
-
 	// Stage 1: Implement
 	s.logger.Info("stage: implement", "task_id", taskID)
-	if err := s.executeImplement(ctx, taskID, correlationID, goal); err != nil {
+	if err := s.executeImplement(ctx, taskID, goal); err != nil {
 		return fmt.Errorf("implement failed: %w", err)
 	}
 
 	// Stage 2: Review (with loop for changes_requested)
 	s.logger.Info("stage: review", "task_id", taskID)
 	for {
-		reviewResult, err := s.executeReview(ctx, taskID, correlationID)
+		reviewResult, err := s.executeReview(ctx, taskID)
 		if err != nil {
 			return fmt.Errorf("review failed: %w", err)
 		}
@@ -113,7 +137,7 @@ func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, goal string)
 
 		// Changes requested, implement changes
 		s.logger.Info("changes requested, implementing fixes", "task_id", taskID)
-		if err := s.executeImplementChanges(ctx, taskID, correlationID); err != nil {
+		if err := s.executeImplementChanges(ctx, taskID); err != nil {
 			return fmt.Errorf("implement_changes failed: %w", err)
 		}
 	}
@@ -121,7 +145,7 @@ func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, goal string)
 	// Stage 3: Spec Maintenance (with loop for changes_requested)
 	s.logger.Info("stage: spec maintenance", "task_id", taskID)
 	for {
-		specResult, err := s.executeSpecMaintenance(ctx, taskID, correlationID)
+		specResult, err := s.executeSpecMaintenance(ctx, taskID)
 		if err != nil {
 			return fmt.Errorf("spec maintenance failed: %w", err)
 		}
@@ -133,13 +157,13 @@ func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, goal string)
 
 		// Changes requested, re-implement, re-review, then try spec maintenance again
 		s.logger.Info("spec changes requested, re-implementing", "task_id", taskID)
-		if err := s.executeImplementChanges(ctx, taskID, correlationID); err != nil {
+		if err := s.executeImplementChanges(ctx, taskID); err != nil {
 			return fmt.Errorf("implement_changes (spec loop) failed: %w", err)
 		}
 
 		// Re-review after changes
 		for {
-			reviewResult, err := s.executeReview(ctx, taskID, correlationID)
+			reviewResult, err := s.executeReview(ctx, taskID)
 			if err != nil {
 				return fmt.Errorf("review (spec loop) failed: %w", err)
 			}
@@ -149,7 +173,7 @@ func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, goal string)
 			}
 
 			s.logger.Info("changes requested in spec loop, fixing", "task_id", taskID)
-			if err := s.executeImplementChanges(ctx, taskID, correlationID); err != nil {
+			if err := s.executeImplementChanges(ctx, taskID); err != nil {
 				return fmt.Errorf("implement_changes (spec loop review) failed: %w", err)
 			}
 		}
@@ -159,7 +183,138 @@ func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, goal string)
 	return nil
 }
 
+// ResumeTask continues a task from where it left off by checking the ledger
+// Only commands that don't have terminal events will be executed
+func (s *Scheduler) ResumeTask(ctx context.Context, taskID string, goal string, lg *ledger.Ledger) error {
+	s.logger.Info("resuming task execution", "task_id", taskID, "goal", goal)
+
+	// Get terminal events from ledger
+	terminals := lg.GetTerminalEvents()
+
+	// Check if implement step is complete
+	implementComplete := false
+	for _, cmd := range lg.Commands {
+		if cmd.TaskID == taskID && (cmd.Action == protocol.ActionImplement || cmd.Action == protocol.ActionImplementChanges) {
+			if _, hasTerminal := terminals[cmd.MessageID]; hasTerminal {
+				implementComplete = true
+				s.logger.Info("implement step already complete, skipping", "task_id", taskID)
+				break
+			}
+		}
+	}
+
+	// Stage 1: Implement (if not complete)
+	if !implementComplete {
+		s.logger.Info("stage: implement (resuming)", "task_id", taskID)
+		if err := s.executeImplement(ctx, taskID, goal); err != nil {
+			return fmt.Errorf("implement failed: %w", err)
+		}
+	}
+
+	// Check if review step is complete
+	reviewComplete := false
+	reviewApproved := false
+	for _, cmd := range lg.Commands {
+		if cmd.TaskID == taskID && cmd.Action == protocol.ActionReview {
+			if _, hasTerminal := terminals[cmd.MessageID]; hasTerminal {
+				reviewComplete = true
+				// Find the terminal event to check status
+				for _, evt := range lg.Events {
+					if evt.CorrelationID == cmd.CorrelationID && evt.Event == protocol.EventReviewCompleted {
+						if evt.Status == protocol.ReviewStatusApproved {
+							reviewApproved = true
+						}
+						break
+					}
+				}
+				s.logger.Info("review step already complete", "approved", reviewApproved, "task_id", taskID)
+				break
+			}
+		}
+	}
+
+	// Stage 2: Review (with loop for changes_requested, if not complete or not approved)
+	if !reviewComplete || !reviewApproved {
+		s.logger.Info("stage: review (resuming)", "task_id", taskID)
+		for {
+			reviewResult, err := s.executeReview(ctx, taskID)
+			if err != nil {
+				return fmt.Errorf("review failed: %w", err)
+			}
+
+			if reviewResult == protocol.ReviewStatusApproved {
+				break // Exit review loop
+			}
+
+			// Changes requested, implement changes
+			s.logger.Info("changes requested, implementing fixes", "task_id", taskID)
+			if err := s.executeImplementChanges(ctx, taskID); err != nil {
+				return fmt.Errorf("implement_changes failed: %w", err)
+			}
+		}
+	}
+
+	// Check if spec maintenance step is complete
+	specComplete := false
+	for _, cmd := range lg.Commands {
+		if cmd.TaskID == taskID && cmd.Action == protocol.ActionUpdateSpec {
+			if _, hasTerminal := terminals[cmd.MessageID]; hasTerminal {
+				specComplete = true
+				s.logger.Info("spec maintenance step already complete, skipping", "task_id", taskID)
+				break
+			}
+		}
+	}
+
+	// Stage 3: Spec Maintenance (if not complete)
+	if !specComplete {
+		s.logger.Info("stage: spec maintenance (resuming)", "task_id", taskID)
+		for {
+			specResult, err := s.executeSpecMaintenance(ctx, taskID)
+			if err != nil {
+				return fmt.Errorf("spec maintenance failed: %w", err)
+			}
+
+			// Terminal events: spec.updated or spec.no_changes_needed
+			if specResult == protocol.EventSpecUpdated || specResult == protocol.EventSpecNoChangesNeeded {
+				break // Task complete
+			}
+
+			// Changes requested, re-implement, re-review, then try spec maintenance again
+			s.logger.Info("spec changes requested, re-implementing", "task_id", taskID)
+			if err := s.executeImplementChanges(ctx, taskID); err != nil {
+				return fmt.Errorf("implement_changes (spec loop) failed: %w", err)
+			}
+
+			// Re-review after changes
+			for {
+				reviewResult, err := s.executeReview(ctx, taskID)
+				if err != nil {
+					return fmt.Errorf("review (spec loop) failed: %w", err)
+				}
+
+				if reviewResult == protocol.ReviewStatusApproved {
+					break
+				}
+
+				s.logger.Info("changes requested in spec loop, fixing", "task_id", taskID)
+				if err := s.executeImplementChanges(ctx, taskID); err != nil {
+					return fmt.Errorf("implement_changes (spec loop review) failed: %w", err)
+				}
+			}
+		}
+	}
+
+	s.logger.Info("task resume complete", "task_id", taskID)
+	return nil
+}
+
 func (s *Scheduler) sendCommand(sup *supervisor.AgentSupervisor, cmd *protocol.Command) error {
+	// Track this command for receipt generation
+	s.currentCommand = cmd
+	s.currentEvents = make([]*protocol.Event, 0)
+	s.stepCounter++
+
 	// Log command to event log
 	if s.eventLog != nil {
 		if err := s.eventLog.WriteCommand(cmd); err != nil {
@@ -175,10 +330,34 @@ func (s *Scheduler) sendCommand(sup *supervisor.AgentSupervisor, cmd *protocol.C
 	return sup.SendCommand(cmd)
 }
 
-func (s *Scheduler) executeImplement(ctx context.Context, taskID string, correlationID string, goal string) error {
+func (s *Scheduler) writeReceipt() error {
+	// Only write receipts if we have a workspace root and a command
+	if s.workspaceRoot == "" || s.currentCommand == nil {
+		return nil
+	}
+
+	// Create receipt from command and collected events
+	rec := receipt.NewReceipt(s.currentCommand, s.stepCounter, s.currentEvents)
+
+	// Determine receipt path
+	receiptPath := filepath.Join(s.workspaceRoot, "receipts", s.currentCommand.TaskID, fmt.Sprintf("step-%d.json", s.stepCounter))
+
+	// Write receipt
+	if err := receipt.WriteReceipt(rec, receiptPath); err != nil {
+		return fmt.Errorf("failed to write receipt: %w", err)
+	}
+
+	s.logger.Info("wrote receipt",
+		"task_id", s.currentCommand.TaskID,
+		"step", s.stepCounter,
+		"path", receiptPath)
+
+	return nil
+}
+
+func (s *Scheduler) executeImplement(ctx context.Context, taskID string, goal string) error {
 	cmd := s.makeCommand(
 		taskID,
-		correlationID,
 		protocol.AgentTypeBuilder,
 		protocol.ActionImplement,
 		map[string]any{"goal": goal},
@@ -188,13 +367,21 @@ func (s *Scheduler) executeImplement(ctx context.Context, taskID string, correla
 		return err
 	}
 
-	return s.waitForEvent(ctx, s.builder, protocol.EventBuilderCompleted, taskID)
+	if err := s.waitForEvent(ctx, s.builder, protocol.EventBuilderCompleted, taskID); err != nil {
+		return err
+	}
+
+	// Write receipt after successful completion
+	if err := s.writeReceipt(); err != nil {
+		s.logger.Warn("failed to write receipt", "error", err)
+	}
+
+	return nil
 }
 
-func (s *Scheduler) executeImplementChanges(ctx context.Context, taskID string, correlationID string) error {
+func (s *Scheduler) executeImplementChanges(ctx context.Context, taskID string) error {
 	cmd := s.makeCommand(
 		taskID,
-		correlationID,
 		protocol.AgentTypeBuilder,
 		protocol.ActionImplementChanges,
 		map[string]any{},
@@ -204,13 +391,21 @@ func (s *Scheduler) executeImplementChanges(ctx context.Context, taskID string, 
 		return err
 	}
 
-	return s.waitForEvent(ctx, s.builder, protocol.EventBuilderCompleted, taskID)
+	if err := s.waitForEvent(ctx, s.builder, protocol.EventBuilderCompleted, taskID); err != nil {
+		return err
+	}
+
+	// Write receipt after successful completion
+	if err := s.writeReceipt(); err != nil {
+		s.logger.Warn("failed to write receipt", "error", err)
+	}
+
+	return nil
 }
 
-func (s *Scheduler) executeReview(ctx context.Context, taskID string, correlationID string) (string, error) {
+func (s *Scheduler) executeReview(ctx context.Context, taskID string) (string, error) {
 	cmd := s.makeCommand(
 		taskID,
-		correlationID,
 		protocol.AgentTypeReviewer,
 		protocol.ActionReview,
 		map[string]any{},
@@ -225,13 +420,17 @@ func (s *Scheduler) executeReview(ctx context.Context, taskID string, correlatio
 		return "", err
 	}
 
+	// Write receipt after successful completion
+	if err := s.writeReceipt(); err != nil {
+		s.logger.Warn("failed to write receipt", "error", err)
+	}
+
 	return evt.Status, nil
 }
 
-func (s *Scheduler) executeSpecMaintenance(ctx context.Context, taskID string, correlationID string) (string, error) {
+func (s *Scheduler) executeSpecMaintenance(ctx context.Context, taskID string) (string, error) {
 	cmd := s.makeCommand(
 		taskID,
-		correlationID,
 		protocol.AgentTypeSpecMaintainer,
 		protocol.ActionUpdateSpec,
 		map[string]any{},
@@ -242,6 +441,7 @@ func (s *Scheduler) executeSpecMaintenance(ctx context.Context, taskID string, c
 	}
 
 	// Wait for one of the terminal spec events
+	var eventType string
 	for {
 		select {
 		case <-ctx.Done():
@@ -262,27 +462,48 @@ func (s *Scheduler) executeSpecMaintenance(ctx context.Context, taskID string, c
 			case protocol.EventSpecUpdated,
 				protocol.EventSpecNoChangesNeeded,
 				protocol.EventSpecChangesRequested:
-				return evt.Event, nil
+				eventType = evt.Event
+				goto done
 			}
 		case hb := <-s.specMaintainer.Heartbeats():
 			s.notifyHeartbeat(hb)
 		}
 	}
+
+done:
+	// Write receipt after successful completion
+	if err := s.writeReceipt(); err != nil {
+		s.logger.Warn("failed to write receipt", "error", err)
+	}
+
+	return eventType, nil
 }
 
 func (s *Scheduler) makeCommand(
 	taskID string,
-	correlationID string,
 	agentType protocol.AgentType,
 	action protocol.Action,
 	inputs map[string]any,
 ) *protocol.Command {
-	return &protocol.Command{
+	// Use configured snapshot ID, or placeholder if not set
+	snapshotID := s.snapshotID
+	if snapshotID == "" {
+		snapshotID = "snap-test-0001" // Placeholder for tests
+	}
+
+	// Generate unique correlation ID for this command
+	correlationID := fmt.Sprintf("corr-%s-%s-%s",
+		taskID,
+		string(action),
+		uuid.New().String()[:8])
+
+	// Create command with all required fields
+	cmd := &protocol.Command{
 		Kind:           protocol.MessageKindCommand,
 		MessageID:      uuid.New().String(),
 		CorrelationID:  correlationID,
 		TaskID:         taskID,
-		IdempotencyKey: fmt.Sprintf("pending-ik:%s:%s", action, taskID),
+		IdempotencyKey: "", // Will be set below
 		To: protocol.AgentRef{
 			AgentType: agentType,
 		},
@@ -290,7 +511,7 @@ func (s *Scheduler) makeCommand(
 		Inputs:          inputs,
 		ExpectedOutputs: []protocol.ExpectedOutput{},
 		Version: protocol.Version{
-			SnapshotID: "snap-test-0001", // Placeholder for P1.2
+			SnapshotID: snapshotID,
 		},
 		Deadline: time.Now().Add(10 * time.Minute).UTC(),
 		Retry: protocol.Retry{
@@ -299,6 +520,17 @@ func (s *Scheduler) makeCommand(
 		},
 		Priority: 5,
 	}
+
+	// Generate idempotency key
+	ik, err := idempotency.GenerateIK(cmd)
+	if err != nil {
+		// Fall back to simple key if generation fails (shouldn't happen in practice)
+		s.logger.Warn("failed to generate idempotency key, using fallback", "error", err)
+		ik = fmt.Sprintf("fallback-ik:%s:%s:%s", action, taskID, snapshotID)
+	}
+	cmd.IdempotencyKey = ik
+
+	return cmd
 }
 
 func (s *Scheduler) waitForEvent(ctx context.Context, sup *supervisor.AgentSupervisor, eventType string, taskID string) error {
@@ -328,6 +560,11 @@ func (s *Scheduler) waitForEventReturn(ctx context.Context, sup *supervisor.Agen
 }
 
 func (s *Scheduler) notifyEvent(evt *protocol.Event) {
+	// Track event for current command (if correlation IDs match)
+	if s.currentCommand != nil && evt.CorrelationID == s.currentCommand.CorrelationID {
+		s.currentEvents = append(s.currentEvents, evt)
+	}
+
 	// Log event to event log
 	if s.eventLog != nil {
 		if err := s.eventLog.WriteEvent(evt); err != nil {

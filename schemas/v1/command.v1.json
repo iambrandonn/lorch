@@ -1,0 +1,153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/iambrandonn/lorch/schemas/v1/command.v1.json",
+  "title": "Command",
+  "description": "A command message sent from lorch orchestrator to an agent",
+  "type": "object",
+  "required": [
+    "kind",
+    "message_id",
+    "correlation_id",
+    "task_id",
+    "idempotency_key",
+    "to",
+    "action",
+    "inputs",
+    "expected_outputs",
+    "version",
+    "deadline",
+    "retry",
+    "priority"
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "const": "command",
+      "description": "Message envelope type"
+    },
+    "message_id": {
+      "type": "string",
+      "pattern": "^cmd-[a-f0-9]{8}$",
+      "description": "Unique identifier for this command message"
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Correlation ID for tracking related messages"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^T-[0-9]{4}$",
+      "description": "Task identifier (e.g., T-0042)"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^ik:[a-f0-9]{64}$",
+      "description": "Deterministic idempotency key for crash recovery"
+    },
+    "to": {
+      "type": "object",
+      "required": ["agent_type"],
+      "properties": {
+        "agent_type": {
+          "type": "string",
+          "enum": ["builder", "reviewer", "spec_maintainer", "orchestration", "system"],
+          "description": "Target agent role"
+        },
+        "agent_id": {
+          "type": "string",
+          "description": "Optional specific agent instance ID"
+        }
+      },
+      "description": "Target agent reference"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "implement",
+        "implement_changes",
+        "review",
+        "update_spec",
+        "intake",
+        "task_discovery"
+      ],
+      "description": "Action to perform"
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Action-specific input parameters"
+    },
+    "expected_outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "required"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Expected artifact path"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of expected artifact"
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether this output is mandatory"
+          }
+        }
+      },
+      "description": "Expected artifacts to be produced"
+    },
+    "version": {
+      "type": "object",
+      "required": ["snapshot_id"],
+      "properties": {
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^snap-[a-f0-9]{12}$",
+          "description": "Workspace snapshot ID this command references"
+        },
+        "specs_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "Optional hash of specs/ directory"
+        },
+        "code_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "description": "Optional hash of src/ directory"
+        }
+      },
+      "description": "Version information pinning workspace state"
+    },
+    "deadline": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp when command expires"
+    },
+    "retry": {
+      "type": "object",
+      "required": ["attempt", "max_attempts"],
+      "properties": {
+        "attempt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Current attempt number (0-indexed)"
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum retry attempts allowed"
+        }
+      },
+      "description": "Retry metadata"
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Command priority (0=lowest, 10=highest)"
+    }
+  },
+  "additionalProperties": false
+}

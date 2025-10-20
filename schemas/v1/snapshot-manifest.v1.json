@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/iambrandonn/lorch/schemas/v1/snapshot-manifest.v1.json",
+  "title": "Snapshot Manifest",
+  "description": "A manifest capturing the state of a workspace at a point in time",
+  "type": "object",
+  "required": [
+    "snapshot_id",
+    "created_at",
+    "workspace_root",
+    "files"
+  ],
+  "properties": {
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^snap-[a-f0-9]{12}$",
+      "description": "Unique identifier for this snapshot (first 12 hex chars of content hash)"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp when snapshot was captured"
+    },
+    "workspace_root": {
+      "type": "string",
+      "description": "Path to workspace root (typically './')"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "size", "mtime"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File path relative to workspace root"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "description": "SHA256 checksum of file contents"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "File size in bytes"
+          },
+          "mtime": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC3339 timestamp of last modification"
+          }
+        }
+      },
+      "description": "List of tracked files in workspace (specs/, src/, tests/, docs/)"
+    }
+  },
+  "additionalProperties": false
+}

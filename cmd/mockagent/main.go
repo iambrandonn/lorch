@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -140,14 +141,46 @@ type Script struct {
 
 // ResponseTemplate defines how to respond to a command
 type ResponseTemplate struct {
-	Events []protocol.Event `json:"events"`
-	Delay  time.Duration    `json:"delay,omitempty"`
+	// Events to send in response (will be sent in order)
+	Events []EventTemplate `json:"events"`
+	// Optional delay before sending events
+	DelayMs int `json:"delay_ms,omitempty"`
+	// Error to return instead of sending events
+	Error string `json:"error,omitempty"`
+}
+
+// EventTemplate defines an event to send
+type EventTemplate struct {
+	// Event type (e.g., "builder.completed")
+	Type string `json:"type"`
+	// Event status (optional, e.g., "approved")
+	Status string `json:"status,omitempty"`
+	// Event payload
+	Payload map[string]any `json:"payload,omitempty"`
+	// Artifacts to include
+	Artifacts []ArtifactTemplate `json:"artifacts,omitempty"`
+}
+
+// ArtifactTemplate defines an artifact
+type ArtifactTemplate struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
 }
 
 func (a *MockAgent) loadScript(path string) error {
-	// Placeholder for script loading
-	// In a full implementation, this would read and parse the JSON file
-	a.logger.Info("script loading not yet implemented", "path", path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read script file: %w", err)
+	}
+
+	var script Script
+	if err := json.Unmarshal(data, &script); err != nil {
+		return fmt.Errorf("failed to parse script JSON: %w", err)
+	}
+
+	a.script = &script
+	a.logger.Info("loaded script", "path", path, "actions", len(script.Responses))
 	return nil
 }
 
@@ -279,9 +312,18 @@ func (a *MockAgent) handleCommand(cmd *protocol.Command) error {
 	a.logger.Info("handling command",
 		"action", cmd.Action,
 		"task_id", cmd.TaskID,
-		"message_id", cmd.MessageID)
+		"message_id", cmd.MessageID,
+		"idempotency_key", cmd.IdempotencyKey)
 
-	// Simple default behavior: echo success for any action
+	// Check if we have a scripted response for this action
+	if a.script != nil {
+		if template, ok := a.script.Responses[string(cmd.Action)]; ok {
+			a.logger.Info("using scripted response", "action", cmd.Action)
+			return a.executeScriptedResponse(cmd, template)
+		}
+	}
+
+	// Fall back to default behavior
 	switch cmd.Action {
 	case protocol.ActionImplement, protocol.ActionImplementChanges:
 		return a.handleImplement(cmd)
@@ -294,6 +336,58 @@ func (a *MockAgent) handleCommand(cmd *protocol.Command) error {
 	default:
 		return fmt.Errorf("unknown action: %s", cmd.Action)
 	}
+}
+
+func (a *MockAgent) executeScriptedResponse(cmd *protocol.Command, template ResponseTemplate) error {
+	// Check if this is an error response
+	if template.Error != "" {
+		a.logger.Info("returning scripted error", "error", template.Error)
+		return fmt.Errorf("%s", template.Error)
+	}
+
+	// Apply delay if specified
+	if template.DelayMs > 0 {
+		delay := time.Duration(template.DelayMs) * time.Millisecond
+		a.logger.Info("applying scripted delay", "delay_ms", template.DelayMs)
+		time.Sleep(delay)
+	}
+
+	// Send all events in order
+	for i, evtTemplate := range template.Events {
+		a.logger.Info("sending scripted event", "index", i, "type", evtTemplate.Type)
+
+		// Convert artifact templates to protocol artifacts
+		var artifacts []protocol.Artifact
+		for _, artTemplate := range evtTemplate.Artifacts {
+			artifacts = append(artifacts, protocol.Artifact{
+				Path:   artTemplate.Path,
+				SHA256: artTemplate.SHA256,
+				Size:   artTemplate.Size,
+			})
+		}
+
+		evt := protocol.Event{
+			Kind:          protocol.MessageKindEvent,
+			MessageID:     fmt.Sprintf("evt-%s", uuid.New().String()[:8]),
+			CorrelationID: cmd.CorrelationID,
+			TaskID:        cmd.TaskID,
+			From: protocol.AgentRef{
+				AgentType: a.agentType,
+				AgentID:   a.agentID,
+			},
+			Event:      evtTemplate.Type,
+			Status:     evtTemplate.Status,
+			Payload:    evtTemplate.Payload,
+			Artifacts:  artifacts,
+			OccurredAt: time.Now().UTC(),
+		}
+
+		if err := a.encoder.Encode(evt); err != nil {
+			return fmt.Errorf("failed to send event %d: %w", i, err)
+		}
+	}
+
+	return nil
 }
 
 func (a *MockAgent) handleImplement(cmd *protocol.Command) error {

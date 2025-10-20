@@ -1,0 +1,36 @@
+{
+  "responses": {
+    "implement": {
+      "delay_ms": 100,
+      "events": [
+        {
+          "type": "builder.completed",
+          "status": "success",
+          "payload": {
+            "summary": "Implementation completed",
+            "tests": {
+              "status": "pass",
+              "summary": "All tests passed"
+            }
+          }
+        }
+      ]
+    },
+    "review": {
+      "delay_ms": 50,
+      "events": [
+        {
+          "type": "review.completed",
+          "status": "changes_requested",
+          "payload": {
+            "summary": "Please address the following issues",
+            "issues": [
+              "Add error handling for edge case",
+              "Improve test coverage for validation logic"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
