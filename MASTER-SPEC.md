@@ -1,139 +1,116 @@
-**MASTER-SPEC.md**
+# MASTER-SPEC.md
+**Local Orchestrator “lorch” for Multi‑Agent Workflows**
+**Transport:** Filesystem as shared memory; NDJSON over stdio
+**Version:** 1.5 (spec maintainer events, streamlined completion)
+**Status:** Draft – implementation‑ready
 
-**Local Orchestrator for Multi‑Agent Workflows (Filesystem as Shared Memory; NDJSON over stdio)**
-**Version:** 1.0 (initial)
-**Status:** Draft – implementation-ready
+> **What changed in 1.5 (summary)**
+> - Added the `spec.no_changes_needed` terminal event and aligned success criteria to use spec-maintainer signals only.
+> - Removed the unused `finalize` action (and related receipts/pseudocode) now that runs end with spec maintenance.
+> - Clarified example exchanges and artifacts to reflect the simplified agent set while keeping `lorch` ↔ orchestration flow unchanged.
+> - Retained all improvements from v1.4 (builder-driven checks, spec-focused maintenance, CLI alias).
 
-⸻
+---
 
-**1. Purpose & Scope**
+## 1. Purpose & Scope
 
-**1.1 Problem & Importance**
+### 1.1 Problem & Importance
+We need a local‑first, auditable orchestrator that coordinates multiple AI agents (builder, reviewer, spec‑maintainer, and optionally orchestration/NL intake) to implement spec‑driven development tasks. The system must be deterministic, resilient (idempotent & resumable), and easy to operate from a CLI on a single machine.
 
-Teams increasingly coordinate multiple AI-powered agents (builder, reviewer, spec‑maintainer, compliance) to produce code and artifacts. In local-first environments, we need a deterministic, inspectable orchestrator that:
-	•	runs on a single machine (macOS/Linux),
-	•	uses the filesystem as the source of truth,
-	•	coordinates agent processes via stdio (NDJSON),
-	•	persists outcomes durably for audit and re-runs,
-	•	remains portable with minimal dependencies.
+### 1.2 Goals
+- **Local‑first**: single machine (macOS/Linux); no external brokers in v1.
+- **Filesystem‑as‑truth**: all durable artifacts (specs, code, reviews).
+- **Strict mediation**: orchestrator is the **only** process that talks to agents.
+- **NDJSON over stdio**: newline‑delimited JSON IPC; orchestrator routes all messages.
+- **Determinism**: atomic writes, receipts, idempotency keys; repeatable re‑runs.
+- **Human‑in‑control**: surface conflicts; do not auto‑edit plans; gate ambiguous steps.
+- **Clarity & Extensibility**: minimal deps; generic LLM CLI wrappers; swappable agents.
+- **Natural Language intake**: user can say “Manage PLAN.md” — system discovers tasks, asks for approval, then executes (Phase 2).
 
-**1.2 Goals**
-	•	**Local-first orchestration.** No external brokers or servers in v1.
-	•	**Clear agent boundaries.** Orchestrator alone routes messages; agents never talk directly.
-	•	**Deterministic persistence.** Filesystem is canonical; atomic writes, receipts, and manifests.
-	•	**Robust process lifecycle.** Launch, supervise, heartbeat, restart with backoff.
-	•	**Idempotent operations.** Safe to re-run after crash or partial progress.
-	•	**Actionable interfaces.** A precise NDJSON protocol, file conventions, and CLI entry points.
-	•	**Extensible design.** Add/replace agent types without redesigning the core.
+### 1.3 Non‑Goals (v1)
+- Distributed execution, remote brokers, or agent‑to‑agent direct comms.
+- GUI dashboards (stdout transcript is sufficient).
+- Automatic resolution of plan/spec conflicts (must notify user).
 
-**1.3 Non‑Goals (v1)**
-	•	Distributed execution across multiple machines.
-	•	External message buses (Redis/NATS/etc.).
-	•	Agent-to-agent direct channels.
-	•	Rich UI/GUI; v1 is CLI-oriented with file outputs.
-	•	Cloud storage or network persistence (local FS only).
+- End‑to‑end runs complete: implement (builder ensures tests/lint pass) → review (iterate until approved) → spec maintenance (iterate until approved).
+- Re‑runs after crash are safe and idempotent.
+- NL intake can derive tasks from user instructions and request approval (Phase 2).
+- Protocol conformance (schemas in §3) passes for all agents.
 
-**1.4 Success Criteria**
-	•	A builder agent can implement tasks; reviewer and compliance agents can validate and drive iterations; spec‑maintainer can update specs.
-	•	Three or more end‑to‑end runs complete with deterministic artifacts and receipts.
-	•	Re-run after orchestrator crash produces identical artifacts (or cleanly skips via idempotency receipts).
-	•	Protocol conformance tests pass for command/event/heartbeat schemas.
+- **Phase 1 – Core Orchestrator Foundation**: Deliver `lorch run` with builder/reviewer/spec-maintainer agents, deterministic filesystem persistence, append-only ledger, single-agent scheduling, and resumability via idempotency keys.
+- **Phase 2 – Natural Language Task Intake**: Introduce the orchestration agent and intake/task discovery commands, human approval loop with `system.user_decision`, transcript printing, and conflict surfacing without auto-editing plans/specs.
+- **Phase 3 – Interactive Configuration**: Ship auto-initialized `lorch.json`, the `lorch config` interactive editor with two-tier validation, and generic LLM/tool configuration hooks to keep the orchestrator flexible.
+- **Phase 4 – Advanced Error Handling & Conflict Resolution**: Extend recovery to richer diagnostics, structured conflict reporting/escalation, and additional guardrails that keep humans in control while maintaining deterministic outcomes.
 
-⸻
+---
 
-**2. Architecture Overview**
+## 2. Architecture Overview
 
-**2.1 Components**
+### 2.1 Components & Trust Boundaries
 
 ```
 +-----------------------------+
-|         Orchestrator        |
-| - CLI entrypoint            |
-| - Agent supervisor          |
+|           lorch             |  (trusted)
+| - CLI (run, resume, config) |
+| - Scheduler (1-at-a-time)   |
 | - Router (NDJSON stdio)     |
-| - Ledger (events)           |
-| - Scheduler                 |
-| - State/recovery            |
+| - Agent Supervisor          |
+| - Ledger & Receipts         |
+| - NL Task Intake (Phase 2)* |
 +--^-----------^-----------^--+
    |           |           |
    | stdio     | stdio     | stdio
-   |           |           |
-+--+--+     +--+--+     +--+--+
-|Agent|     |Agent|     |Agent|
-|Build|     |Review|    |Compliance|
-+-----+     +------+    +---------+
-      \        |             /
-       \       |            /
-        \      |           /
-         v     v          v
-          +----------------------+
-          |    Filesystem        |
-          | /specs  /src /tests  |
-          | /reviews /compliance |
-          | /events /logs /state |
-          +----------------------+
+   v           v           v
++------+   +--------+   +----------------+
+|Builder|  |Reviewer|   |Spec-Maintainer |
++------+   +--------+   +----------------+
+         (optional Phase 2 agent)
+                         +--------------------+
+                         | Orchestration (NL) |
+                         +--------------------+
 
+                (all untrusted agents)
+                    |
+                    v
+         +---------------------------+
+         |  Filesystem (source of    |
+         |  truth): /specs /src ...  |
+         +---------------------------+
 ```
 
-**Trust Boundaries**
-	•	**Orchestrator** is trusted to enforce protocol, routing, lifecycle, and persistence.
-	•	**Agents** are untrusted processes. They must be sandboxable and cannot access each other.
-	•	**Filesystem** is the canonical source of truth. The orchestrator verifies and records all changes via manifests/receipts.
+\* **Natural Language Task Intake (NLTI)** can be implemented either (a) as a **separate orchestration agent** (recommended, Phase 2) or (b) as built‑in logic in `lorch`. This spec standardizes the **agent variant** to keep the core orchestrator minimal and deterministic.
 
-**2.2 Agent Roles & Responsibilities**
-	•	**Builder**: Implements tasks (write/modify code, tests, docs). Emits granular progress and a builder.completed event with produced artifacts.
-	•	**Reviewer**: Reads outputs and emits review.completed with status: approved or changes_requested, including findings and file-level comments.
-	•	**Compliance**: Validates policy checks, licensing, tests, lint, security scans; emits compliance.completed with pass|fail and evidence.
-	•	**Spec‑Maintainer**: Updates /specs/*.md and task specs; emits spec.updated and/or changes_requested for structure or scope.
+### 2.2 Agent Roles
+- **Builder** — implements tasks; writes/updates code & tests; must run tests/lint before declaring success; emits `builder.completed`.
+- **Reviewer** — evaluates outputs for code quality; emits `review.completed` with `approved | changes_requested`.
+- **Spec‑Maintainer** — validates implementation against SPEC.md, may update allowed sections, and emits `spec.updated | spec.no_changes_needed | spec.changes_requested`.
+- **Orchestration (NL)** — derives a concrete task plan from user instructions; emits `orchestration.proposed_tasks` and `orchestration.needs_clarification`. *Never edits plan/spec files.*
 
-**2.3 Orchestrator Responsibilities**
-	•	Load configuration (orchestrate.json), create run state.
-	•	Spawn agents via CLI wrappers; connect stdio; log/stdout capture.
-	•	Route *commands* to agents; read *events/heartbeats/logs* from agents.
-	•	Maintain a durable **ledger** of all messages and **receipts** for artifacts.
-	•	Decide **who acts next** using routing rules & policy.
-	•	Handle timeouts, restarts, backoff, and resumability.
+### 2.3 Operational Constraints
+- **Concurrency = 1** (one agent active at a time per run).
+- **lorch** prints **live transcripts** of conversations with each agent to **stdout**. No other progress indicator is required.
 
-⸻
+---
 
-**3. IPC Protocol (NDJSON over stdio)**
+## 3. IPC Protocol (NDJSON over stdio)
 
-**Transport:** UTF‑8 NDJSON, one JSON object per line, no pretty printing.
-**Envelope rules:**
-	•	kind determines schema: "command" | "event" | "heartbeat" | "log".
-	•	message_id is unique (UUIDv4 recommended).
-	•	correlation_id ties responses to a particular command (commands set it; events echo it).
-	•	task_id scopes work to a single task.
-	•	Timestamps: RFC 3339 UTC.
+**Transport**: UTF‑8 NDJSON (one JSON per line).
+**Envelope**: `kind` ∈ `command | event | heartbeat | log`.
+Common fields: `message_id`, `correlation_id`, `task_id`, timestamps RFC 3339 UTC.
+**Max NDJSON line**: 256 KiB. Diffs/logs/artifacts are referenced by **file paths** + checksums.
 
-**Line Size Limits:**
-	•	Max message size: **256 KiB**.
-	•	Larger payloads (diffs, logs, artifacts) must be referenced by file paths and checksums rather than inlined.
+### 3.1 `command` (lorch → agent)
 
-**3.1 Message: command**
+**Actions (enum)**
+`implement | implement_changes | review | update_spec | intake | task_discovery`
 
-Used by the orchestrator → agent.
+- `intake` / `task_discovery` are used with the **Orchestration (NL)** agent.
+- `update_spec` targets the spec-maintainer; other agents ignore it.
 
-**Actions (enum):**
-implement, implement_changes, review, compliance_check, finalize, update_spec
-
-**Fields (summary):**
-	•	kind: "command"
-	•	message_id, correlation_id, task_id, idempotency_key
-	•	to: { agent_type, agent_id? }
-	•	action
-	•	inputs: freeform JSON (paths, hints)
-	•	expected_outputs: artifact descriptors (paths, patterns)
-	•	version: { specs_hash?, code_hash?, snapshot_id }
-	•	deadline: RFC 3339
-	•	retry: { attempt, max_attempts }
-	•	priority: integer
-
-**JSON Schema – Command**
-
-```
+**Schema**
+```json
 {
-  "$id": "https://local.orchestrator/schemas/command.v1.json",
+  "$id": "https://lorch/schemas/command.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Command",
   "type": "object",
@@ -154,13 +131,19 @@ implement, implement_changes, review, compliance_check, finalize, update_spec
       "additionalProperties": false,
       "required": ["agent_type"],
       "properties": {
-        "agent_type": { "type": "string", "enum": ["builder","reviewer","compliance","spec_maintainer"] },
+        "agent_type": {
+          "type": "string",
+          "enum": ["builder","reviewer","spec_maintainer","orchestration"]
+        },
         "agent_id": { "type": "string" }
       }
     },
     "action": {
       "type": "string",
-      "enum": ["implement","implement_changes","review","compliance_check","finalize","update_spec"]
+      "enum": [
+        "implement","implement_changes","review",
+        "update_spec","intake","task_discovery"
+      ]
     },
     "inputs": { "type": "object" },
     "expected_outputs": {
@@ -200,52 +183,32 @@ implement, implement_changes, review, compliance_check, finalize, update_spec
     "priority": { "type": "integer", "minimum": 0 }
   }
 }
-
 ```
 
-**Example Command (implement):**
-
-{"kind":"command","message_id":"6c4a...","correlation_id":"corr-T-0042-1","task_id":"T-0042","idempotency_key":"ik:implement:T-0042:v3","to":{"agent_type":"builder"},"action":"implement","inputs":{"sections":["3.1","3.2","3.3"],"spec_path":"specs/MASTER-SPEC.md"},"expected_outputs":[{"path":"src/foo/bar.js"},{"path":"tests/foo/bar.spec.js"}],"version":{"snapshot_id":"snap-0007","specs_hash":"sha256:...","code_hash":"sha256:..."},"deadline":"2025-10-13T19:00:00Z","retry":{"attempt":0,"max_attempts":3},"priority":5}
-
-
-⸻
-
-**3.2 Message: event**
-
-Emitted by agents → orchestrator.
-
-**Event Types (non-exhaustive):**
-	•	builder.progress, builder.completed
-	•	review.completed (status: approved|changes_requested)
-	•	compliance.completed (status: pass|fail)
-	•	spec.updated, changes.requested
-	•	artifact.produced (with path and checksum)
-	•	error (machine-readable), log (structured)
-
-**Fields (summary):**
-	•	kind: "event"
-	•	message_id, correlation_id, task_id
-	•	from: { agent_type, agent_id? }
-	•	event: string type
-	•	status: optional enum depending on type
-	•	payload: freeform JSON
-	•	artifacts: optional array of { path, sha256, size }
-	•	observed_version: mirror of version from command when relevant
-	•	occurred_at: RFC 3339
-
-**JSON Schema – Event**
-
+**Example (intake)**
+```json
+{"kind":"command","message_id":"m-01","correlation_id":"corr-intake-1","task_id":"T-0050","idempotency_key":"ik:intake:T-0050:snap-0009","to":{"agent_type":"orchestration"},"action":"intake","inputs":{"user_instruction":"I've got a PLAN.md. Manage the implementation of it"},"expected_outputs":[{"path":"tasks/T-0050.plan.json"}],"version":{"snapshot_id":"snap-0009"},"deadline":"2025-10-19T19:00:00Z","retry":{"attempt":0,"max_attempts":3},"priority":5}
 ```
+
+### 3.2 `event` (agent → lorch)
+
+**Representative event types**
+- Builder: `builder.progress`, `builder.completed`
+- Reviewer: `review.completed` (`approved | changes_requested`)
+- Spec‑Maintainer: `spec.updated`, `spec.no_changes_needed`, `spec.changes_requested`
+- Orchestration(NL): `orchestration.proposed_tasks`, `orchestration.needs_clarification`, `orchestration.plan_conflict`
+- Generic: `artifact.produced`, `error`, `log`
+- System (from lorch): `system.user_decision` (records human approvals/denials)
+
+**Schema**
+```json
 {
-  "$id": "https://local.orchestrator/schemas/event.v1.json",
+  "$id": "https://lorch/schemas/event.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Event",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "kind","message_id","correlation_id","task_id",
-    "from","event","occurred_at"
-  ],
+  "required": ["kind","message_id","correlation_id","task_id","from","event","occurred_at"],
   "properties": {
     "kind": { "const": "event" },
     "message_id": { "type": "string" },
@@ -256,7 +219,10 @@ Emitted by agents → orchestrator.
       "additionalProperties": false,
       "required": ["agent_type"],
       "properties": {
-        "agent_type": { "type": "string", "enum": ["builder","reviewer","compliance","spec_maintainer"] },
+        "agent_type": {
+          "type": "string",
+          "enum": ["builder","reviewer","spec_maintainer","orchestration","system"]
+        },
         "agent_id": { "type": "string" }
       }
     },
@@ -288,43 +254,25 @@ Emitted by agents → orchestrator.
     "occurred_at": { "type": "string", "format": "date-time" }
   }
 }
-
 ```
 
-**Example Event (builder.completed):**
-
-{"kind":"event","message_id":"e1b3...","correlation_id":"corr-T-0042-1","task_id":"T-0042","from":{"agent_type":"builder","agent_id":"builder#1"},"event":"builder.completed","status":"success","payload":{"notes":"Implemented sections 3.1–3.3"},"artifacts":[{"path":"src/foo/bar.js","sha256":"sha256:...","size":1432},{"path":"tests/foo/bar.spec.js","sha256":"sha256:...","size":782}],"observed_version":{"snapshot_id":"snap-0007"},"occurred_at":"2025-10-13T18:10:02Z"}
-
-**Example Event (review.completed changes_requested):**
-
-{"kind":"event","message_id":"a9c2...","correlation_id":"corr-T-0042-2","task_id":"T-0042","from":{"agent_type":"reviewer"},"event":"review.completed","status":"changes_requested","payload":{"review_path":"reviews/T-0042.json","summary":"Edge cases missing in bar.js","required_changes":["handle null inputs","add error branch test"]},"occurred_at":"2025-10-13T18:20:41Z"}
-
-**Example Event (compliance.completed pass):**
-
-{"kind":"event","message_id":"c05d...","correlation_id":"corr-T-0042-3","task_id":"T-0042","from":{"agent_type":"compliance"},"event":"compliance.completed","status":"pass","payload":{"report_path":"compliance/T-0042.json","coverage":0.91},"occurred_at":"2025-10-13T18:30:12Z"}
-
-
-⸻
-
-**3.3 Message: heartbeat**
-
-Emitted by agent shims on an interval to indicate liveness to the orchestrator.
-
-**Fields (summary):**
-	•	kind: "heartbeat"
-	•	agent: { agent_type, agent_id }
-	•	seq: monotonically increasing integer per process
-	•	status: starting|ready|busy|stopping|backoff
-	•	pid, ppid
-	•	uptime_s, last_activity_at
-	•	stats: { cpu_pct, rss_bytes }
-	•	task_id?: when busy
-
-**JSON Schema – Heartbeat**
-
+**Example (orchestration.proposed_tasks)**
+```json
+{"kind":"event","message_id":"e-01","correlation_id":"corr-intake-1","task_id":"T-0050","from":{"agent_type":"orchestration"},"event":"orchestration.proposed_tasks","payload":{"plan_candidates":[{"path":"PLAN.md","confidence":0.82},{"path":"docs/plan_v2.md","confidence":0.61}],"derived_tasks":[{"id":"T-0050-1","title":"Implement sections 1–2","files":["src/a.js","tests/a.spec.js"]},{"id":"T-0050-2","title":"Implement sections 3–4","files":["src/b.js","tests/b.spec.js"]}],"notes":"Found 2 plausible plan files."},"occurred_at":"2025-10-19T18:03:00Z"}
 ```
+
+**Example (system.user_decision)**
+```json
+{"kind":"event","message_id":"e-02","correlation_id":"corr-intake-1","task_id":"T-0050","from":{"agent_type":"system"},"event":"system.user_decision","status":"approved","payload":{"approved_plan":"PLAN.md","approved_tasks":["T-0050-1","T-0050-2"],"prompt":"Use PLAN.md and proceed"},"occurred_at":"2025-10-19T18:05:10Z"}
+```
+
+### 3.3 `heartbeat` (agent → lorch)
+Shim‑level liveness.
+
+**Schema**
+```json
 {
-  "$id": "https://local.orchestrator/schemas/heartbeat.v1.json",
+  "$id": "https://lorch/schemas/heartbeat.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Heartbeat",
   "type": "object",
@@ -337,7 +285,10 @@ Emitted by agent shims on an interval to indicate liveness to the orchestrator.
       "additionalProperties": false,
       "required": ["agent_type","agent_id"],
       "properties": {
-        "agent_type": { "type": "string", "enum": ["builder","reviewer","compliance","spec_maintainer"] },
+        "agent_type": {
+          "type": "string",
+          "enum": ["builder","reviewer","spec_maintainer","orchestration"]
+        },
         "agent_id": { "type": "string" }
       }
     },
@@ -358,640 +309,593 @@ Emitted by agent shims on an interval to indicate liveness to the orchestrator.
     "task_id": { "type": "string" }
   }
 }
-
 ```
 
+### 3.4 Logs & Errors
+- `log`: `{"kind":"log","level":"info|warn|error","message":"...","fields":{...},"timestamp":"..."}`
+- Action failures **must** use `event` with `event:"error"` and machine‑readable `payload.code`.
 
-⸻
+---
 
-**3.4 Logs & Errors**
-	•	**Logs**: {"kind":"log","level":"info|warn|error","message":"...","fields":{...},"timestamp":"..."}
-	•	**Errors**: Either as event with event:"error" and machine-readable payload.code, or as log with level:"error".
-For conformance, agents **must** use event:"error" for action-level failures.
+## 4. Process Flow (Single‑Agent‑at‑a‑Time)
 
-⸻
+### 4.1 Normal Execution
+1. **Startup**
+   - `lorch` loads or **auto‑creates** `lorch.json` (see §8).
+   - Creates `run_id`, snapshot (`snap-XXXX`), initializes `/state/run.json`.
+   - Spawns all configured agents (idle) and starts heartbeats.
 
-**4. Process Flow**
+   > **Invocation note**: running `lorch` with no subcommand is identical to executing `lorch run`.
 
-**4.1 Typical Run (init → implement → review → compliance → finalize)**
-	1.	**Initialization**
-	•	Orchestrator loads orchestrate.json, allocates run_id, creates /state/run.json, and takes a **snapshot** (snap-0007) of the workspace manifest.
-	•	Spawns agent shims (builder, reviewer, compliance, spec‑maintainer), connects stdio, and begins heartbeat supervision.
-	2.	**Implement**
-	•	Router issues command(action=implement) to **builder** with idempotency_key derived from task inputs and snapshot (see §5.4).
-	•	Builder writes artifacts to temp files, atomically renames to targets, and emits artifact.produced events, then builder.completed.
-	3.	**Review**
-	•	Router issues command(action=review) to **reviewer** referencing produced artifacts. Reviewer writes /reviews/<task>.json and emits review.completed with approved or changes_requested.
-	•	If changes_requested, orchestrator branches to **Implement changes**.
-	4.	**Implement changes (if needed)**
-	•	Router issues command(action=implement_changes) to **builder** referencing review file; follow deterministic writes; return to **Review**.
-	5.	**Compliance**
-	•	Router issues command(action=compliance_check) to **compliance**. Compliance writes /compliance/<task>.json and emits compliance.completed pass|fail.
-	•	On fail, orchestrator may route back to builder or spec‑maintainer per policy.
-	6.	**Finalize**
-	•	On review.approved **and** compliance.pass, router issues command(action=finalize) to **spec_maintainer** (optional) to update /specs status sections; orchestrator writes a **closing receipt**, updates /state/run.json to completed.
+2. **(Phase 2) Natural Language Intake (optional but specified)**
+   - If user starts with **no explicit task**: `lorch` (alias `lorch run`) prompts:
+     ```
+     lorch> What should I do? (e.g., "Use PLAN.md and manage its implementation")
+     ```
+   - `lorch` sends `command(action=intake)` to **orchestration** agent.
+   - Orchestration returns `orchestration.proposed_tasks` with plan candidates and derived tasks.
+   - **lorch prints transcript** and asks user to **approve/modify** plan selection and tasks.
+   - `lorch` records decision as `system.user_decision`.
+   - If ambiguous, orchestration may emit `orchestration.needs_clarification` → `lorch` prompts human for answers and re‑issues `intake` with same `idempotency_key`.
 
-**4.2 Example Exchanges (3 concrete)**
+3. **Implement → Review (iterate) → Spec Maintenance (iterate) → Complete**
+   - **Implement**: send `implement` to **builder**; wait for `builder.completed` (must include passing test/lint summaries).
+   - **Review**: send `review` to **reviewer`. If `changes_requested`, loop: `implement_changes` → `review` until `approved`.
+   - **Spec Maintenance**: send `update_spec` to **spec‑maintainer**. If they emit `spec.changes_requested`, loop: `implement_changes` → `review` → `update_spec` until ready.
+   - Run completion is signaled by `spec.updated` or `spec.no_changes_needed`.
+
+4. **Completion**
+   - Success = `review.completed: approved` **and** either `spec.updated` or `spec.no_changes_needed`.
+   - Failure = user aborts, agent exhausts retries, or persistent conflicts; notify the user and stop.
+
+### 4.2 Required Iteration Order (hard‑coded)
+```
+Implement → Review
+  ↳ if changes_requested → Implement Changes → Review (repeat)
+Approved → Spec Maintenance (update_spec)
+  ↳ if spec.changes_requested → Implement Changes → Review → Spec Maintenance (repeat)
+Spec Updated/No Changes Needed → Done
+```
+
+### 4.3 Example Exchanges (≥3)
+
+**Exchange 0 – NL Intake & Approval**
+```
+lorch → Orchestration: command(intake)
+Orchestration → lorch: event(orchestration.proposed_tasks)
+lorch → user (console): prints candidates & derived tasks → ask approve?
+lorch → lorch ledger: event(system.user_decision, status=approved)
+```
 
 **Exchange A – Implement**
-
 ```
-Orchestrator -> Builder: command implement (corr-T-0042-1)
-Builder -> Orchestrator: event artifact.produced (src/foo/bar.js)
-Builder -> Orchestrator: event artifact.produced (tests/foo/bar.spec.js)
-Builder -> Orchestrator: event builder.completed (status=success)
-
+lorch → Builder: command(implement)
+Builder → lorch: event(artifact.produced)
+Builder → lorch: event(builder.completed, tests={"status":"pass"})
 ```
 
 **Exchange B – Review requests changes**
-
 ```
-Orchestrator -> Reviewer: command review (corr-T-0042-2)
-Reviewer -> Orchestrator: event review.completed (status=changes_requested, review_path=reviews/T-0042.json)
-
-```
-Orchestrator -> Builder: command implement_changes (corr-T-0042-2b, references reviews/T-0042.json)
-
-**Exchange C – Compliance pass & finalize**
-
-```
-Orchestrator -> Compliance: command compliance_check (corr-T-0042-3)
-Compliance -> Orchestrator: event compliance.completed (status=pass, report_path=compliance/T-0042.json)
-Orchestrator -> SpecMaint: command update_spec (corr-T-0042-4)
-SpecMaint -> Orchestrator: event spec.updated (payload: updated sections)
-
+lorch → Reviewer: command(review)
+Reviewer → lorch: event(review.completed: changes_requested, reviews/T-0042.json)
+lorch → Builder: command(implement_changes)
 ```
 
-**4.3 Failure/Retry Branches**
-	•	**Agent timeout** → orchestrator sends SIGTERM, waits grace period, escalates to SIGKILL, restarts with exponential backoff; resend command **with same idempotency_key**.
-	•	**Validation fail** → orchestrator routes to builder with implement_changes.
-	•	**Multiple reviews** → all run; policy: any changes_requested triggers changes; else approved.
+**Exchange C – Spec maintenance approves**
+```
+lorch → SpecMaint: command(update_spec)
+SpecMaint → lorch: event(spec.updated)
+```
 
-⸻
+**Exchange C′ – Spec maintenance confirms no edits required**
+```
+lorch → SpecMaint: command(update_spec)
+SpecMaint → lorch: event(spec.no_changes_needed)
+```
 
-**5. Persistence & State**
+**Exchange D – Spec maintainer asks for changes**
+```
+lorch → SpecMaint: command(update_spec)
+SpecMaint → lorch: event(spec.changes_requested, spec_notes/T-0042.json)
+lorch → Builder: command(implement_changes)
+Builder → lorch: event(builder.completed, tests={"status":"pass"})
+lorch → Reviewer: command(review)
+Reviewer → lorch: event(review.completed: approved)
+lorch → SpecMaint: command(update_spec)
+SpecMaint → lorch: event(spec.updated)
+```
 
-**5.1 Durable vs. Ephemeral**
-	•	**Durable (files):**
-	•	/specs/**, /src/**, /tests/**
-	•	/reviews/<task>.json, /compliance/<task>.json
-	•	/events/<run_id>.ndjson (append-only ledger)
-	•	/receipts/<task>/<step>.json (artifact manifests)
-	•	/state/run.json, /state/index.json (current pointers)
-	•	/logs/<agent>/<run_id>.ndjson
-	•	**Ephemeral:**
-	•	In-flight NDJSON streams on stdio
-	•	Orchestrator’s in-memory scheduler queues
+---
 
-**5.2 Directories & Conventions**
+## 5. Persistence & State
 
+### 5.1 Durable vs Ephemeral
+- **Durable**
+  - `/specs/**`, `/src/**`, `/tests/**`
+  - `/reviews/<task>.json`, `/spec_notes/<task>.json`
+  - `/events/run-<id>.ndjson` (append‑only ledger)
+  - `/receipts/<task>/<step>.json` (artifact manifests)
+  - `/logs/<agent>/<run_id>.ndjson`
+  - `/state/run.json`, `/state/index.json`
+  - `/snapshots/snap-XXXX.manifest.json`
+  - `/transcripts/<run_id>.txt` (optional human‑readable transcript derived from events)
+
+- **Ephemeral**
+  - In‑flight stdio streams, in‑memory scheduler.
+
+### 5.2 Directory Layout
 ```
 /specs/MASTER-SPEC.md
-/src/**            # source
-/tests/**          # test files
-/reviews/T-0042.json
-/compliance/T-0042.json
-/events/run-<timestamp>-<shortid>.ndjson
+/src/**                 /tests/**
+/reviews/T-0042.json    /spec_notes/T-0042.json
+/events/run-20251019-...ndjson
 /receipts/T-0042/step-<n>.json
-/logs/<agent_type>/<run_id>.ndjson
-/state/run.json               # active run snapshot pointer & status
-/state/index.json             # task registry (id -> last run_id, snapshot_id)
-/snapshots/snap-0007.manifest.json
-/tmp-orch/**                  # temp, orchestrator-managed
-
+/logs/builder/run-...ndjson (etc.)
+/state/run.json         /state/index.json
+/snapshots/snap-0009.manifest.json
+/transcripts/run-...txt (optional pretty print)
 ```
 
-**5.3 Snapshots & Manifests**
-	•	A **snapshot** is a manifest file listing all tracked files (paths, sha256, size, mtime).
-	•	snapshot_id is content-addressed: snap-<first8(sha256(manifest))>.
-	•	Agents echo observed_version.snapshot_id back on events.
+### 5.3 Snapshots & Manifests
+- Snapshot lists tracked files (path, sha256, size, mtime).
+- `snapshot_id = "snap-" + first8(sha256(manifest_bytes))`.
+- Commands carry `version.snapshot_id`; agents echo `observed_version.snapshot_id`.
 
-**5.4 Idempotency Keys (IK)**
-	•	**Definition:** ik = H(action, task_id, snapshot_id, sorted(inputs), sorted(expected_outputs)) (e.g., SHA‑256 hex prefixed with ik:).
-	•	**Agent contract:**
-	•	If an agent receives a command with an idempotency_key it has **already completed** successfully, it must:
-	•	**not** rewrite artifacts,
-	•	emit event indicating status:"success" and reference prior receipts (idempotent acknowledgment).
-	•	**Orchestrator behavior on retry:** resends same idempotency_key until a different snapshot or inputs change.
-
-**5.5 Deterministic Writes**
-	•	Agents must:
-	1.	Write to a temp file under the same directory: .<basename>.tmp.<pid>.<rand>.
-	2.	fsync(temp_fd); fsync(dir_fd) after atomic rename() to final path.
-	3.	Emit artifact.produced (path, sha256, size).
-	4.	Orchestrator records a **receipt** including idempotency_key, artifact metadata, and the producing event message IDs.
-
-**5.6 Rehydration After Crash/Restart**
-	•	On startup, orchestrator:
-	•	Reads /state/run.json and /events/<run_id>.ndjson.
-	•	Reconstructs last known step from latest builder.completed|review.completed|compliance.completed.
-	•	Verifies artifact receipts exist and files match checksums.
-	•	Resends the **next** command; if prior command had no terminal event, resend it with the **same idempotency_key**.
-
-⸻
-
-**6. Routing Rules**
-
-**6.1 Who Acts Next**
-	•	Default policy for a task:
-	1.	Builder implement
-	2.	Reviewer review
-	3.	If changes_requested → Builder implement_changes → back to Reviewer
-	4.	If approved → Compliance compliance_check
-	5.	If pass → Spec‑Maintainer update_spec (optional) → Finalize
-
-**6.2 Correlation & Task IDs**
-	•	task_id is user-provided (e.g., T-0042).
-	•	correlation_id per command chain; reuses same value across retries of the same logical action.
-	•	run_id scoped to orchestrator run; included in logs and ledger filename.
-
-**6.3 Version Pinning**
-	•	Commands include version.snapshot_id (and optional code_hash/specs_hash).
-	•	Agents must check observed_version.snapshot_id matches the command; otherwise emit event error with code:"version_mismatch".
-
-⸻
-
-**7. Error Handling & Recovery**
-
-**7.1 Timeouts**
-	•	**Heartbeat interval:** 10s (configurable per agent).
-	•	**Missed heartbeats tolerance:** 3 intervals → agent assumed unhealthy.
-	•	**Command execution timeout:** per action (default 10m implement, 5m review, 5m compliance, 2m update_spec).
-
-**7.2 Backoff & Restart**
-	•	Exponential backoff: initial 1s, multiplier 2, max 60s, full jitter.
-	•	Max restarts per agent per run: 5 (configurable). Exceeding → run fails with diagnostics.
-
-**7.3 Orphaned Processes**
-	•	On orchestrator start, adopt children via PID handshake (agent shims emit heartbeat status=starting with ppid). If adoption fails, orchestrator issues termination then clean start.
-
-**7.4 Partial Writes & Conflicts**
-	•	Orchestrator validates artifact checksums against receipts; partial or mismatched writes cause command failure with code:"artifact_mismatch", triggering retry.
-	•	**Multiple reviews**: merge logic (policy default):
-	•	If any changes_requested → route to builder.
-	•	If all approved → proceed to compliance.
-	•	Ties/errors → escalate to spec‑maintainer for adjudication (changes.requested event allowed).
-
-**7.5 Resumability**
-	•	All commands are idempotent (via IK). Re-sent commands must not duplicate artifacts.
-	•	Ledger is append-only; reconstruction relies on last terminal event per correlation.
-
-⸻
-
-**8. Security & Safety**
-	•	**Filesystem Permissions:** Orchestrator creates directories with umask 077; files default 0600 (override via config).
-	•	**Path Sanitization:** Reject paths containing .., absolute paths outside workspace root, or symlinks escaping root.
-	•	**Secrets Redaction:** Environment variables matching *_TOKEN|*_KEY|*_SECRET are masked in logs/events.
-	•	**Sandboxing (recommended):** Run agent shims under separate users or namespaces (where available), with restricted network access.
-	•	**Resource Limits:** Use OS ulimit/rlimit to cap CPU time, file descriptors, and memory per agent.
-
-⸻
-
-**9. Performance & Limits**
-	•	**Message size:** 256 KiB max; spill to files for larger content.
-	•	**Artifact size:** configurable; default warn >100 MiB; hard cap 1 GiB.
-	•	**Concurrency policy:**
-	•	Default: **one active agent per task**; multiple tasks can run in parallel (configurable N).
-	•	Router ensures no two agents concurrently mutate the same path set.
-	•	**Streaming Handling:** Events may stream progress; orchestrator applies backpressure by draining stdout continuously; if agent blocks on full pipe, orchestrator prioritizes reads.
-
-⸻
-
-**10. Extensibility**
-
-**10.1 Adding a New Agent Type**
-	•	Implement CLI shim supporting this spec:
-	•	Read command NDJSON on stdin.
-	•	Emit heartbeat every heartbeat_interval_s.
-	•	Emit event/log NDJSON to stdout.
-	•	Register the agent in orchestrate.json under agents.
-	•	Provide smoke tests and schema conformance fixtures.
-
-**10.2 Swapping Models/Tools**
-	•	Agent shims wrap any model/tool CLIs. The orchestrator is agnostic to the internals.
-	•	Configuration selects binaries, args, and env per agent.
-
-**10.3 Configuration Format (orchestrate.json)**
-
+### 5.4 Idempotency Keys (IK)
 ```
+ik = SHA256(
+  action + '\n' + task_id + '\n' + snapshot_id + '\n' +
+  canonical_json(inputs) + '\n' + canonical_json(expected_outputs)
+)
+```
+- Agents **must** treat repeated commands with the same IK as **already handled**: no rewrites; emit success referencing prior receipts.
+- lorch reuses IK across retries until inputs or snapshot change.
+
+### 5.5 Deterministic Writes (agents)
+1. Write to `.<basename>.tmp.<pid>.<rand>` in same dir.
+2. `fsync(tmp)` → atomic `rename(tmp, final)` → `fsync(dir)`.
+3. Emit `artifact.produced` with `{path, sha256, size}`.
+4. lorch records a **receipt** linking artifacts to IK and message IDs.
+
+### 5.6 Crash/Restart Rehydration
+- On startup: read `/state/run.json` and ledger; rebuild last terminal events; verify receipts & checksums; resend the **next** command.
+- If a prior command has no terminal event, **resend it with the same IK**.
+
+---
+
+## 6. Routing Rules
+
+### 6.1 Who Acts Next (policy)
+1. (Optional) Orchestration(NL) to intake/derive tasks → require **user approval**.
+2. Builder `implement`.
+3. Reviewer `review`. If `changes_requested` → Builder `implement_changes` → Reviewer `review` (repeat).
+4. Spec‑Maintainer `update_spec` (allowed sections only). If `spec.changes_requested` → Builder `implement_changes` → Reviewer → Spec‑Maintainer (repeat).
+5. Run completes.
+
+### 6.2 Correlation, Tasks, Versions
+- `task_id` is stable per user scenario (e.g., `T-0042`).
+- `correlation_id` per command chain; preserved across retries.
+- **Version pinning** via `snapshot_id` (and optional `code_hash`, `specs_hash`). Agents must error with `version_mismatch` if snapshots differ.
+
+---
+
+## 7. Error Handling & Recovery
+
+### 7.1 Timeouts (defaults; config in §8)
+- Heartbeat interval: 10s; tolerate 3 misses → unhealthy.
+- Command timeouts: implement 600s; review 300s; update_spec 180s; intake 180s.
+
+### 7.2 Backoff & Restart
+- Exponential backoff: initial 1s, x2, max 60s, full jitter; max 5 restarts per agent per run.
+
+### 7.3 Orphaned or Stuck Processes
+- On resume, attempt adoption via heartbeat; else terminate & clean start.
+- If stdout stalls (pipe full), lorch prioritizes draining.
+
+### 7.4 Conflict Handling Philosophy
+- **Never auto‑modify plan/spec content.**
+- Orchestration agent emits `orchestration.plan_conflict` or `needs_clarification`.
+- lorch prints the issue, requests a human decision, records `system.user_decision`, and proceeds or aborts accordingly.
+
+### 7.5 Resumability
+- Entire workflow is idempotent via IKs and append‑only ledger.
+- Partial writes are detected by checksum mismatch → retry same IK.
+
+---
+
+## 8. Configuration Management (`lorch.json`)
+
+### 8.1 Auto‑Creation & Validation
+- On first run, if `lorch.json` absent, lorch **auto‑creates** it with sensible defaults.
+- **Two‑tier validation**: on `lorch config` changes and at startup.
+
+### 8.2 Example `lorch.json`
+```json
 {
   "version": "1.0",
   "workspace_root": ".",
-  "tasks": [
-    {
-      "id": "T-0042",
-      "goal": "Implement sections 3.1–3.3 of /specs/MASTER-SPEC.md"
-    }
-  ],
   "policy": {
-    "max_parallel_tasks": 2,
+    "concurrency": 1,
     "message_max_bytes": 262144,
     "artifact_max_bytes": 1073741824,
-    "retry": {
-      "max_attempts": 3,
-      "backoff": {
-        "initial_ms": 1000,
-        "max_ms": 60000,
-        "multiplier": 2.0,
-        "jitter": "full"
-      }
-    }
+    "retry": { "max_attempts": 3, "backoff": { "initial_ms": 1000, "max_ms": 60000, "multiplier": 2.0, "jitter": "full" } },
+    "strict_version_pinning": true,
+    "parallel_reviews": false,
+    "redact_secrets_in_logs": true
   },
   "agents": {
     "builder": {
-      "cmd": ["./agents/builder.sh"],
-      "cwd": ".",
-      "env": {
-        "MODEL": "local-llm",
-        "LOG_LEVEL": "info"
-      },
+      "cmd": ["claude"],
       "heartbeat_interval_s": 10,
-      "timeouts": {
-        "implement_s": 600,
-        "implement_changes_s": 600
-      }
+      "timeouts_s": { "implement": 600, "implement_changes": 600 },
+      "env": { "CLAUDE_AGENT_ROLE": "builder", "LOG_LEVEL": "info" }
     },
     "reviewer": {
-      "cmd": ["./agents/reviewer.sh"],
+      "cmd": ["claude"],
       "heartbeat_interval_s": 10,
-      "timeouts": {
-        "review_s": 300
-      }
-    },
-    "compliance": {
-      "cmd": ["./agents/compliance.sh"],
-      "timeouts": {
-        "compliance_check_s": 300
-      }
+      "timeouts_s": { "review": 300 },
+      "env": { "CLAUDE_AGENT_ROLE": "reviewer" }
     },
     "spec_maintainer": {
-      "cmd": ["./agents/spec-maint.sh"]
+      "cmd": ["claude"],
+      "timeouts_s": { "update_spec": 180 },
+      "env": { "CLAUDE_AGENT_ROLE": "spec_maintainer" }
+    },
+    "orchestration": {
+      "enabled": true,
+      "cmd": ["claude"],
+      "timeouts_s": { "intake": 180, "task_discovery": 180 },
+      "env": { "CLAUDE_AGENT_ROLE": "orchestration" }
     }
   },
-  "feature_flags": [
-    "strict_version_pinning",
-    "redact_secrets_in_logs"
+  "tasks": [
+    { "id": "T-0042", "goal": "Implement sections 3.1–3.3 of /specs/MASTER-SPEC.md" }
   ]
 }
-
 ```
 
-**10.4 Feature Flags**
-	•	strict_version_pinning: reject events without matching observed_version.
-	•	ledger_checksums: hash each ledger line for tamper-evidence.
-	•	parallel_reviews: spawn multiple reviewers and aggregate.
+### 8.3 CLI
+- `lorch` — shorthand for `lorch run`; supports the same flags and defaults to NL intake when no task is specified.
+- `lorch run [--task T-0042]` — start a run. If `--task` omitted, prompt for NL instruction (Phase 2).
+- `lorch resume --run <run_id>` — resume from ledger/state.
+- `lorch config` — interactive editor with validation (Phase 3).
+- `lorch validate --schemas` — schema compliance for agents.
+- `lorch doctor` — environment checks.
+- `lorch help` — *(planned, low priority; may arrive in a later phase for discoverability only).*
 
-⸻
+---
 
-**11. Testing & Validation**
+## 9. Routing & Console Transcript
 
-**11.1 Protocol Conformance**
-	•	Validate agent output against JSON Schemas for **command**, **event**, **heartbeat** (this spec).
-	•	Negative tests: oversize messages, missing required fields, invalid enums.
+- lorch **prints all agent messages** (commands and events) to console in human‑readable lines:
+  ```
+  [builder] artifact.produced src/foo/bar.js (1.4 KiB)
+  [reviewer] review.completed changes_requested (see reviews/T-0042.json)
+  ```
+- The same content is recorded in `/events/run-*.ndjson`.
+- Optional pretty transcript at `/transcripts/run-*.txt` may be generated from ledger.
 
-**11.2 Agent Smoke Tests**
-	•	Builder: receives implement with IK X → writes artifact → emits builder.completed with correct checksum.
-	•	Reviewer: accepts inputs → writes /reviews/<task>.json → emits review.completed.
-	•	Compliance: runs checks → emits compliance.completed pass|fail.
+---
 
-**11.3 Minimal E2E Scenario**
+## 10. Extensibility & Determinism
+
+### 10.1 Adding/Swapping Agents
+- Each agent is a **CLI wrapper** speaking NDJSON on stdio; internals (LLM/tool) are pluggable.
+- Default model/tool is configured by env in `lorch.json` (e.g., `"MODEL":"common-llm"`). No per‑LLM customization required by lorch.
+
+### 10.2 Orchestration Agent (NL) Contract
+- **Inputs**: user instruction text; workspace context.
+- **Outputs**: `orchestration.proposed_tasks` (list of candidate plan/spec files + derived task list), or `needs_clarification` with questions.
+- **Constraints**:
+  - MUST NOT modify plan/spec files.
+  - MUST route through lorch; never prompt user directly.
+  - MUST accept stable IK behavior for repeatability.
+
+### 10.3 Event Types (additions)
+- `orchestration.proposed_tasks`, `orchestration.needs_clarification`, `orchestration.plan_conflict`.
+- `system.user_decision` (originated by lorch).
+
+### 10.4 File Discovery (for NL intake)
+- Search paths: `[".", "docs", "specs", "plans"]` (recursive, ignore `node_modules`, `.git`, hidden dirs).
+- Candidate extensions: `.md`, `.rst`, `.txt`.
+- Basic heuristics: rank by filename tokens (`plan`, `spec`, `proposal`) and heading similarity; **present to user for approval**.
+
+### 10.5 SPEC.md Allowed Edits (spec‑maintainer)
+- May edit **only** these sections/markers to keep runs deterministic:
+  - `## Status` table (task IDs, states, timestamps).
+  - `## Changelog` (append entries).
+  - `## Completion` markers (checkboxes or status tags).
+  - `## Open Questions` (append new items only).
+- **Must NOT** change requirements text, acceptance criteria, or instructions outside these areas.
+
+---
+
+## 11. Run Validation
+
+### 11.1 Passing Run
+- Artifacts exist & match receipt checksums.
+- Final `review.completed: approved`.
+- Spec maintainer emitted `spec.updated` (or `spec.no_changes_needed`) after verifying requirements.
+- SPEC.md updates confined to allowed sections.
+- Ledger contains terminal events for each correlation; `/state/run.json` shows `completed`.
+
+### 11.2 Protocol Conformance
+- Validate agent IO against **command**, **event**, **heartbeat** schemas.
+- Negative tests: oversize messages, invalid enums, missing required fields.
+
+### 11.3 Agent Smoke Tests
+- Builder: `implement` → runs tests/lint, produces `/receipts/...` + `builder.completed` summarizing results.
+- Reviewer: `review` → `/reviews/<task>.json` + `review.completed`.
+- Spec‑Maintainer: `update_spec` → `/spec_notes/<task>.json` (optional) + `spec.updated` or `spec.no_changes_needed`.
+- Orchestration: `intake` → `orchestration.proposed_tasks` with ≥1 candidate, or `needs_clarification`.
+
+---
+
+## 12. Performance & Limits (defaults)
+
+| Setting                      | Default | Notes                               |
+|-----------------------------|---------|-------------------------------------|
+| Concurrency                 | 1       | Exactly one active agent at a time  |
+| Max NDJSON message          | 256 KiB | Larger content via files            |
+| Artifact hard cap           | 1 GiB   | Configurable                        |
+| Heartbeat interval          | 10 s    | Miss 3 → unhealthy                  |
+| Max restarts per agent/run  | 5       | With exponential backoff            |
+
+---
+
+## 13. Security & Safety
+
+- **Permissions**: create files with `0600`, dirs `0700` (configurable via umask).
+- **Path safety**: reject `..`, absolute paths outside workspace, or escaping symlinks.
+- **Secrets**: redact env ending in `_TOKEN|_KEY|_SECRET` from logs and ledger.
+- **Sandboxing**: recommend separate OS users/namespaces for each agent; network‑off unless required by the agent.
+
+---
+
+## 14. Pseudocode (Key Mechanisms)
+
+### 14.1 lorch Main Loop (single‑agent scheduler)
+```pseudo
+load_or_init_config()
+run_id = new_run_id()
+snapshot = take_snapshot()
+spawn_agents()
+
+if no --task:
+  // Phase 2 path: NL intake
+  cmd = mk_command(to=orchestration, action=intake, inputs={user_instruction})
+  send(cmd); await events until proposed_tasks or needs_clarification
+  while event == needs_clarification:
+    ask_user_questions(); resend same IK with updated inputs
+  present_candidates_and_tasks_to_user()
+  record_event(system.user_decision)
+  if user_denies: abort_run()
+
+for each approved_task in order:
+  implement_review_spec_complete(approved_task)
+
+complete_run()
+```
+
+### 14.2 Implement → Review → Spec Maintenance loop
+```pseudo
+function implement_review_spec_complete(task):
+  send(builder, implement); await builder.completed or retry
+  ensure(builder.report.tests.status == "pass" or builder.report.tests.allowed_failures)
+  do:
+    send(reviewer, review); await review.completed
+    if status == "changes_requested":
+      send(builder, implement_changes); await builder.completed
+  while status == "changes_requested"
+
+  send(spec_maintainer, update_spec); await spec.updated or spec.no_changes_needed or spec.changes_requested
+  while last_event == "spec.changes_requested":
+    send(builder, implement_changes); await builder.completed
+    send(reviewer, review); await review.completed (must be approved)
+    send(spec_maintainer, update_spec); await spec.updated or spec.no_changes_needed or spec.changes_requested
+```
+
+### 14.3 Heartbeat Supervisor
+```pseudo
+every interval:
+  for agent in agents:
+    if now - last_heartbeat(agent) > 3 * interval:
+      mark_unhealthy(agent)
+      cancel_inflight(agent)
+      restart_with_backoff(agent)
+      resend_last_command_same_IK(agent)
+```
+
+### 14.4 Agent Safe Write
+```pseudo
+atomic_write(path, bytes):
+  tmp = dirname(path) + "/." + basename(path) + ".tmp." + pid + "." + rand()
+  write(tmp, bytes); fsync(tmp)
+  rename(tmp, path); fsync(dirname(path))
+```
+---
+
+## 15. Example End‑to‑End Scenario (grounded)
 
 **Initial Use Case**
-Task T-0042: Implement sections 3.1–3.3 of /specs/MASTER-SPEC.md.
+Task `T-0042`: Implement sections 3.1–3.3 of `/specs/MASTER-SPEC.md`.
 
-**Before (Directory Snapshot)**
-
+**Before (snapshot)**
 ```
 .
 ├─ specs/
-│  └─ MASTER-SPEC.md        # missing sections 3.1–3.3
+│  └─ MASTER-SPEC.md          # missing sections 3.1–3.3
 ├─ src/
 ├─ tests/
-├─ orchestrate.json
+├─ lorch.json                 # auto-created on first run (defaults)
 └─ state/
-
 ```
 
-**Run Outline**
-	1.	Orchestrator snapshot → snap-0007.
-	2.	Command(A): implement → Builder creates:
-	•	src/foo/bar.js
-	•	tests/foo/bar.spec.js
-	3.	Command(B): review → Reviewer writes reviews/T-0042.json with changes_requested.
-	4.	Command(C): implement_changes → Builder updates files; emits builder.completed.
-	5.	Command(D): review → Reviewer approved.
-	6.	Command(E): compliance_check → Compliance pass.
-	7.	Command(F): update_spec → Spec‑Maintainer updates specs/MASTER-SPEC.md to mark sections complete.
+**Run (console sketch)**
+```
+$ lorch run --task T-0042
+[lorch] snapshot snap-0007
+[lorch→builder] command implement (corr T-0042-1)
+[builder] artifact.produced src/foo/bar.js (1.4 KiB)
+[builder] artifact.produced tests/foo/bar.spec.js (0.8 KiB)
+[builder] builder.completed success
+[lorch→reviewer] command review (corr T-0042-2)
+[reviewer] review.completed changes_requested (reviews/T-0042.json)
+[lorch→builder] command implement_changes (corr T-0042-2b)
+[builder] builder.completed success
+[lorch→reviewer] command review (corr T-0042-2c)
+[reviewer] review.completed approved
+[lorch→spec_maintainer] command update_spec
+[spec_maintainer] spec.updated (status table, completion marker)
+[lorch] DONE
+```
 
-**After (Directory Snapshot)**
-
+**After (snapshot)**
 ```
 .
 ├─ specs/
-│  └─ MASTER-SPEC.md           # sections 3.1–3.3 implemented & marked complete
+│  └─ MASTER-SPEC.md           # sections 3.1–3.3 marked complete (allowed areas only)
 ├─ src/
 │  └─ foo/bar.js
 ├─ tests/
 │  └─ foo/bar.spec.js
 ├─ reviews/
 │  └─ T-0042.json
-├─ compliance/
+├─ spec_notes/
 │  └─ T-0042.json
 ├─ events/
-│  └─ run-20251013-1810Z-abc123.ndjson
+│  └─ run-20251019-...ndjson
 ├─ receipts/
 │  └─ T-0042/
-│     ├─ step-1.json           # implement
-│     ├─ step-2.json           # implement_changes
-│     └─ finalize.json
+│     ├─ step-1.json
+│     ├─ step-2.json
+│     └─ update_spec.json
 ├─ logs/
 │  ├─ builder/run-...ndjson
 │  ├─ reviewer/run-...ndjson
-│  ├─ compliance/run-...ndjson
 │  └─ spec_maintainer/run-...ndjson
 └─ state/
-   ├─ run.json                 # status=completed
-   └─ index.json               # task->last run, snapshot pointer
-
+   ├─ run.json  (status=completed)
+   └─ index.json
 ```
 
-**Validation Checks**
-	•	Checksums of src/foo/bar.js and test file match receipts/*.
-	•	Ledger contains terminal events for all correlations.
-	•	reviews/T-0042.json shows approved in final iteration.
-	•	compliance/T-0042.json status pass.
+**Validation**
+- Checksums in receipts match actual files.
+- `review.completed` final event is `approved`.
+- Spec maintainer emits `spec.updated` or `spec.no_changes_needed` to confirm requirements satisfied.
+- SPEC.md changes limited to allowed sections.
 
-⸻
+---
 
-**12. Operational Behavior**
+## 16. Interfaces & File Conventions
 
-**12.1 CLI Entry Points**
-	•	orchestrate run --task T-0042 [--config orchestrate.json]
-	•	orchestrate resume --run <run_id>
-	•	orchestrate validate --schemas (schema linting)
-	•	orchestrate doctor (env & capability checks)
-
-**12.2 Process Supervision**
-	•	Child processes started with inherited environment + overlay:
-	•	ORCH_RUN_ID, ORCH_TASK_ID, ORCH_WORKSPACE_ROOT, ORCH_HEARTBEAT_INTERVAL_S
-	•	Stdout consumed line-by-line; stderr mirrored to /logs/<agent>/... as log records with level:"error" unless valid NDJSON.
-
-**12.3 Heartbeats & Health**
-	•	If no heartbeat for 30s (default), mark agent unhealthy.
-	•	On unhealthy during active command → cancel, restart, resend (same IK).
-
-**12.4 Logging**
-	•	All incoming/outgoing messages mirrored to:
-	•	/events/<run_id>.ndjson (router-level ledger; append-only)
-	•	/logs/<agent>/<run_id>.ndjson (raw agent lines, validated or not)
-
-**12.5 Recovery & Resume**
-	•	resume reconstructs last stable step (§5.6), validates receipts, and continues.
-
-⸻
-
-**13. Interfaces & File Conventions**
-
-**13.1 Message Schemas**
-	•	**Command / Event / Heartbeat** as specified in §3 (JSON Schemas included).
-	•	**Error/Log** follow §3.4.
-
-**13.2 Artifact Receipts**
-
-```
-/receipts/<task>/<step>.json
-
-```
-
-```
+### 16.1 Artifact Receipts
+`/receipts/<task>/<step>.json`
+```json
 {
   "task_id": "T-0042",
   "step": 1,
-  "idempotency_key": "ik:implement:T-0042:v3",
+  "idempotency_key": "ik:implement:T-0042:snap-0007:...",
   "artifacts": [
     {"path":"src/foo/bar.js","sha256":"sha256:...","size":1432},
     {"path":"tests/foo/bar.spec.js","sha256":"sha256:...","size":782}
   ],
-  "events": ["e1b3...","..."],
-  "created_at": "2025-10-13T18:10:04Z"
+  "events": ["msg-e1","msg-e2","msg-e3"],
+  "created_at": "2025-10-19T18:10:04Z"
 }
-
 ```
 
-**13.3 Review & Compliance File Formats**
-	•	/reviews/<task>.json
-
-```
+### 16.2 Review & Spec Notes
+- `/reviews/<task>.json`
+```json
 {
   "task_id":"T-0042",
   "status":"changes_requested|approved",
   "findings":[{"path":"src/foo/bar.js","line":42,"comment":"Handle null inputs"}],
   "summary":"...",
-  "created_at":"2025-10-13T18:20:40Z"
+  "created_at":"2025-10-19T18:20:40Z"
 }
-
-```
-
-	•	/compliance/<task>.json
-
-```
+- `/spec_notes/<task>.json`
+```json
 {
   "task_id":"T-0042",
-  "status":"pass|fail",
-  "checks":[{"name":"unit_tests","status":"pass","coverage":0.91}],
-  "created_at":"2025-10-13T18:30:12Z"
+  "status":"approved|changes_requested",
+  "summary":"Implementation covers sections 3.1–3.3 exactly; updated status table.",
+  "created_at":"2025-10-19T18:30:12Z"
 }
-
 ```
 
+---
 
-⸻
+## 17. Testing
 
-**14. Pseudocode (Key Mechanisms)**
+### 17.1 Schema Tests
+- Valid/invalid instances for **command**, **event**, **heartbeat**.
+- Ensure `to.agent_type` and `from.agent_type` enums enforce allowed values.
 
-**14.1 Orchestrator Main Loop**
+### 17.2 NL Intake Tests
+- Given instruction “Manage PLAN.md”, orchestration returns at least one candidate and a task list.
+- When ambiguous, orchestration returns `needs_clarification` with ≥1 question; lorch prompts user; repeat with same IK.
 
-```
-load_config()
-run_id = new_run_id()
-init_state(run_id)
-spawn_agents(config.agents)
+### 17.3 Smoke E2E
+- Run with `--task T-0042` (no NL intake) → should complete and update SPEC.md allowed areas.
+- Run with **no** `--task`; provide instruction; approve a candidate; then complete.
 
-while tasks_remaining():
-  task = next_task()
-  state = restore_state(task)
+---
 
-  if state.needs_implement():
-    send_command(builder, implement, ik=compute_ik(...))
-    await_terminal_event_or_retry()
+## 18. Operational Limits & Defaults (quick table)
 
-  if state.needs_review():
-    send_command(reviewer, review, ik=compute_ik(...))
-    await_terminal_event_or_retry()
+| Setting                        | Default |
+|--------------------------------|---------|
+| Implement timeout              | 600 s   |
+| Review timeout                 | 300 s   |
+| Compliance timeout             | 300 s   |
+| Update_spec timeout            | 120 s   |
+| Intake/task_discovery timeout  | 180 s   |
+| Heartbeat interval             | 10 s    |
+| Missed heartbeat threshold     | 3       |
+| Max restarts per agent         | 5       |
+| Max message size               | 256 KiB |
+| Artifact size cap              | 1 GiB   |
 
-  if state.review_changes_requested():
-    send_command(builder, implement_changes, ik=compute_ik(...))
-    await_terminal_event_or_retry()
-    goto review
+---
 
-  if state.needs_compliance():
-    send_command(compliance, compliance_check, ik=compute_ik(...))
-    await_terminal_event_or_retry()
+## 19. Example Messages (copy/paste)
 
-  if state.compliance_passed():
-    optionally send_command(spec_maintainer, update_spec)
-    mark_complete(task)
-
-```
-
-**14.2 Router (Reading Agent Streams)**
-
-```
-for each agent_proc in procs:
-  on_stdout_line(line):
-    msg = parse_json(line)
-    validate_schema(msg)
-    append_to_ledger(msg)
-    update_state_with_event(msg)
-
-```
-    maybe_route_next_command()
-
-**14.3 Heartbeat Supervisor**
-
-```
-every heartbeat_interval:
-  for each agent:
-    if now - agent.last_heartbeat > 3 * interval:
-      mark_unhealthy(agent)
-      cancel_inflight(agent)
-      restart(agent)
-
-```
-      resend_last_command_with_same_ik()
-
-**14.4 Safe Write Helper (for Agents)**
-
-```
-function atomic_write(path, bytes):
-  tmp = dirname(path) + "/." + basename(path) + ".tmp." + pid + "." + rand()
-  write(tmp, bytes)
-  fsync(tmp)
-  rename(tmp, path)  // atomic within same filesystem
-  fsync(dirname(path))
-
+**artifact.produced**
+```json
+{"kind":"event","message_id":"m1","correlation_id":"corr-T-0042-1","task_id":"T-0042","from":{"agent_type":"builder"},"event":"artifact.produced","payload":{"description":"main module"},"artifacts":[{"path":"src/foo/bar.js","sha256":"sha256:...","size":1432}],"occurred_at":"2025-10-19T18:09:58Z"}
 ```
 
-
-⸻
-
-**15. Compliance & Validation**
-
-**15.1 What Constitutes a Passing Build**
-	•	All required artifacts exist and match receipt checksums.
-	•	Review status is approved.
-	•	Compliance status is pass with evidence.
-	•	Ledger shows terminal events for each correlation with no orphaned commands.
-	•	State shows completed and last snapshot recorded.
-
-**15.2 Reviewer/Compliance Agent Conformance**
-	•	Agents emit events adhering to schemas.
-	•	For idempotent re-commands, agents do not duplicate writes and reference prior receipts.
-
-**15.3 Protocol Tests**
-	•	Provide fixtures:
-	•	Valid/invalid command lines (boundary sizes).
-	•	Event sequences including error and log.
-	•	Heartbeat cadence and missed-heartbeat scenarios.
-
-⸻
-
-**16. Operational Limits & Defaults (recommended)**
-
-**Setting**	**Default**	**Notes**
-Heartbeat interval	10s	agent → orchestrator
-Missed heartbeat threshold	3	then restart with backoff
-Implement timeout	600s	per command
-Review timeout	300s	per command
-Compliance timeout	300s	per command
-Max message size	256 KiB	larger payloads via files
-Artifact hard cap	1 GiB	configurable
-Max parallel tasks	2	configurable
-Max agent restarts per run	5	per agent
-
-
-⸻
-
-**17. Example CLI & Message Transcripts**
-
-**Start a run**
-
-```
-$ orchestrate run --task T-0042
-
+**error (version mismatch)**
+```json
+{"kind":"event","message_id":"m2","correlation_id":"corr-T-0042-1","task_id":"T-0042","from":{"agent_type":"builder"},"event":"error","status":"failed","payload":{"code":"version_mismatch","expected_snapshot":"snap-0007","observed_snapshot":"snap-0006"},"occurred_at":"2025-10-19T18:10:00Z"}
 ```
 
-**Ledger excerpts (/events/run-...ndjson)**
-
+**heartbeat (busy)**
+```json
+{"kind":"heartbeat","agent":{"agent_type":"reviewer","agent_id":"reviewer#1"},"seq":42,"status":"busy","pid":32100,"ppid":32000,"uptime_s":122.4,"last_activity_at":"2025-10-19T18:20:20Z","stats":{"cpu_pct":23.1,"rss_bytes":73400320},"task_id":"T-0042"}
 ```
-{"kind":"command","correlation_id":"corr-T-0042-1",...}
-{"kind":"event","event":"artifact.produced",...}
-{"kind":"event","event":"builder.completed",...}
-{"kind":"command","correlation_id":"corr-T-0042-2",...}
-{"kind":"event","event":"review.completed","status":"changes_requested",...}
-{"kind":"command","correlation_id":"corr-T-0042-2b","action":"implement_changes",...}
-{"kind":"event","event":"builder.completed",...}
-{"kind":"command","correlation_id":"corr-T-0042-2c","action":"review",...}
-{"kind":"event","event":"review.completed","status":"approved",...}
-{"kind":"command","correlation_id":"corr-T-0042-3","action":"compliance_check",...}
-{"kind":"event","event":"compliance.completed","status":"pass",...}
-{"kind":"command","correlation_id":"corr-T-0042-4","action":"update_spec",...}
 
-```
-{"kind":"event","event":"spec.updated",...}
+---
 
+## 20. FAQ (Decisions to Align with Feedback)
 
-⸻
+- **Protocol for new orchestration component?**
+  Yes—**NDJSON** remains the interface; orchestration is just another agent type.
 
-**18. Alternative Design Paths (for awareness)**
-	•	**Versioning backends**
-	•	*Option A (recommended v1):* Manifest-based snapshots in /snapshots.
-	•	*Option B (optional):* Use Git if available; store commit hash in snapshot_id.
-**Pros A:** No external dependency; **Cons A:** Larger local storage.
-**Pros B:** Native diffs/history; **Cons B:** Introduces tool dependency.
-	•	**Multiple reviewers concurrency**
-	•	*Option A:* Sequential single reviewer (simpler).
-	•	*Option B:* Parallel reviewers with aggregation (feature flag).
-Recommendation: Start with A; enable B via parallel_reviews.
+- **Process architecture: in‑process vs. separate agent?**
+  **Separate agent recommended** (Phase 2) to keep lorch core deterministic/minimal.
 
-⸻
+- **Conflict surfacing pattern?**
+  Orchestration emits `orchestration.plan_conflict`/`needs_clarification`; lorch **prints** the issue, asks the user, records `system.user_decision`, and continues or aborts.
 
-**19. Guidelines for Writing Future Specifications**
-	•	Use precise, testable language and define schemas early.
-	•	Specify directory layouts, file formats, and naming conventions.
-	•	Always define idempotency and recovery behavior.
-	•	Provide at least one E2E example with before/after snapshots.
-	•	Prefer configuration-driven variability over bespoke code paths.
+- **Persist transcripts?**
+  Console transcript is primary; the ledger is canonical. An optional prettified transcript is saved as `/transcripts/<run_id>.txt`.
 
-⸻
+- **Task translation from conversation to concrete tasks?**
+  Orchestration proposes task objects (IDs, titles, likely file sets). **User approves**; lorch then issues normal `command` messages per this spec.
 
-**20. Appendix: Message Examples (copy/paste ready)**
-
-**A. artifact.produced**
-
-{"kind":"event","message_id":"m1","correlation_id":"corr-T-0042-1","task_id":"T-0042","from":{"agent_type":"builder"},"event":"artifact.produced","payload":{"description":"main module"},"artifacts":[{"path":"src/foo/bar.js","sha256":"sha256:...","size":1432}],"occurred_at":"2025-10-13T18:09:58Z"}
-
-**B. error (version mismatch)**
-
-{"kind":"event","message_id":"m2","correlation_id":"corr-T-0042-1","task_id":"T-0042","from":{"agent_type":"builder"},"event":"error","status":"failed","payload":{"code":"version_mismatch","expected_snapshot":"snap-0007","observed_snapshot":"snap-0006"},"occurred_at":"2025-10-13T18:10:00Z"}
-
-**C. heartbeat (busy)**
-
-{"kind":"heartbeat","agent":{"agent_type":"reviewer","agent_id":"reviewer#1"},"seq":42,"status":"busy","pid":32100,"ppid":32000,"uptime_s":122.4,"last_activity_at":"2025-10-13T18:20:20Z","stats":{"cpu_pct":23.1,"rss_bytes":73400320},"task_id":"T-0042"}
-
-
-⸻
+---
 
 **End of MASTER-SPEC.md**
-
-*This document is self-contained, implementation-ready, and verifiable. If you want this tailored to a specific language/toolchain or extended with Git-backed snapshots in v1, I can include those details in a follow-up revision.*
