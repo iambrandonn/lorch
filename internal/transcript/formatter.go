@@ -48,6 +48,23 @@ func (f *Formatter) FormatEvent(evt *protocol.Event) string {
 			details += fmt.Sprintf(", notes: %s", evt.Artifacts[0].Path)
 		}
 
+	case protocol.EventOrchestrationProposedTasks:
+		if candidates, ok := evt.Payload["plan_candidates"].([]any); ok {
+			details = fmt.Sprintf("plan candidates: %d", len(candidates))
+		} else {
+			details = "plan candidates"
+		}
+
+	case protocol.EventOrchestrationNeedsClarification:
+		if questions, ok := evt.Payload["questions"].([]any); ok {
+			details = fmt.Sprintf("clarification requested (%d question(s))", len(questions))
+		} else {
+			details = "clarification requested"
+		}
+
+	case protocol.EventOrchestrationPlanConflict:
+		details = "plan conflict reported"
+
 	case protocol.EventArtifactProduced:
 		if len(evt.Artifacts) > 0 {
 			artifact := evt.Artifacts[0]

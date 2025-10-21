@@ -1,16 +1,23 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/iambrandonn/lorch/internal/config"
+	"github.com/iambrandonn/lorch/internal/discovery"
 	"github.com/iambrandonn/lorch/internal/eventlog"
+	"github.com/iambrandonn/lorch/internal/idempotency"
 	"github.com/iambrandonn/lorch/internal/protocol"
 	"github.com/iambrandonn/lorch/internal/runstate"
 	"github.com/iambrandonn/lorch/internal/scheduler"
@@ -33,6 +40,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
+
+	outWriter := cmd.OutOrStdout()
 
 	// Find or create config
 	configPath, err := cmd.Flags().GetString("config")
@@ -70,9 +79,12 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	if taskID == "" {
-		// Phase 2: Natural language intake not yet implemented
-		logger.Info("no task specified; natural language intake (Phase 2) not yet implemented")
-		return fmt.Errorf("--task is required in Phase 1.3; Phase 2 will add natural language intake")
+		outcome, err := runIntakeFlow(cmd, cfg, workspaceRoot, logger)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(outWriter, "Natural language intake completed. Transcript: %s\n", outcome.LogPath)
+		return nil
 	}
 
 	// Find task in config
@@ -184,6 +196,320 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	logger.Info("task execution complete", "run_id", runID)
 	return nil
+}
+
+var errInstructionRequired = errors.New("instruction is required")
+
+type IntakeOutcome struct {
+	RunID       string                      `json:"run_id"`
+	Instruction string                      `json:"instruction"`
+	Discovery   *protocol.DiscoveryMetadata `json:"discovery"`
+	FinalEvent  *protocol.Event             `json:"final_event"`
+	LogPath     string                      `json:"log_path"`
+	StartedAt   time.Time                   `json:"started_at"`
+	CompletedAt time.Time                   `json:"completed_at"`
+}
+
+func runIntakeFlow(cmd *cobra.Command, cfg *config.Config, workspaceRoot string, logger *slog.Logger) (*IntakeOutcome, error) {
+	if cfg.Agents.Orchestration == nil || !cfg.Agents.Orchestration.Enabled {
+		return nil, fmt.Errorf("orchestration agent is not configured or enabled in lorch.json")
+	}
+
+	inputReader := cmd.InOrStdin()
+	outputWriter := cmd.OutOrStdout()
+
+	isTTY := false
+	if file, ok := inputReader.(*os.File); ok {
+		isTTY = isTerminalFile(file)
+	}
+
+	instruction, err := promptForInstruction(inputReader, outputWriter, isTTY)
+	if err != nil {
+		if errors.Is(err, errInstructionRequired) {
+			return nil, fmt.Errorf("instruction required: provide text via standard input or use --task for predefined tasks")
+		}
+		return nil, err
+	}
+
+	fmt.Fprintln(outputWriter)
+	fmt.Fprintln(outputWriter, "Running workspace discovery...")
+
+	meta, err := discovery.Discover(discovery.DefaultConfig(workspaceRoot))
+	if err != nil {
+		return nil, fmt.Errorf("discovery failed: %w", err)
+	}
+
+	orchestrationInputs := protocol.OrchestrationInputs{
+		UserInstruction: instruction,
+		Discovery:       meta,
+	}
+
+	inputsMap, err := orchestrationInputs.ToInputsMap()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build orchestration inputs: %w", err)
+	}
+
+	runID := fmt.Sprintf("intake-%s-%s", time.Now().UTC().Format("20060102-150405"), uuid.New().String()[:8])
+	now := time.Now().UTC()
+
+	command, err := buildIntakeCommand(runID, inputsMap, now, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build orchestration command: %w", err)
+	}
+
+	logPath := filepath.Join(workspaceRoot, "events", runID+"-intake.ndjson")
+	intakeLog, err := eventlog.NewEventLog(logPath, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create intake log: %w", err)
+	}
+	defer intakeLog.Close()
+
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeoutSeconds := resolveTimeout(cfg, "intake", 180)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	orchSupervisor, err := createAgentSupervisor(cfg.Agents.Orchestration, protocol.AgentTypeOrchestration, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create orchestration supervisor: %w", err)
+	}
+	if err := orchSupervisor.Start(ctx); err != nil {
+		return nil, fmt.Errorf("failed to start orchestration agent: %w", err)
+	}
+	defer orchSupervisor.Stop(context.Background())
+
+	if err := intakeLog.WriteCommand(command); err != nil {
+		return nil, fmt.Errorf("failed to write intake command: %w", err)
+	}
+
+	formatter := transcript.NewFormatter()
+	fmt.Fprintln(outputWriter, formatter.FormatCommand(command))
+
+	if err := orchSupervisor.SendCommand(command); err != nil {
+		return nil, fmt.Errorf("failed to send intake command: %w", err)
+	}
+
+	events := orchSupervisor.Events()
+	heartbeats := orchSupervisor.Heartbeats()
+	logs := orchSupervisor.Logs()
+
+	var finalEvent *protocol.Event
+	var finalErr error
+
+	startedAt := now
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case evt, ok := <-events:
+				if !ok {
+					if finalEvent == nil && finalErr == nil {
+						finalErr = fmt.Errorf("orchestration agent exited before responding")
+					}
+					return
+				}
+				_ = intakeLog.WriteEvent(evt)
+				fmt.Fprintln(outputWriter, formatter.FormatEvent(evt))
+
+				if evt.Event == protocol.EventOrchestrationProposedTasks ||
+					evt.Event == protocol.EventOrchestrationNeedsClarification ||
+					evt.Event == protocol.EventError {
+					finalEvent = evt
+					return
+				}
+
+			case hb, ok := <-heartbeats:
+				if !ok {
+					continue
+				}
+				_ = intakeLog.WriteHeartbeat(hb)
+				fmt.Fprintln(outputWriter, formatter.FormatHeartbeat(hb))
+
+			case logMsg, ok := <-logs:
+				if !ok {
+					continue
+				}
+				_ = intakeLog.WriteLog(logMsg)
+				fmt.Fprintln(outputWriter, formatter.FormatLog(logMsg))
+
+			case <-ctx.Done():
+				finalErr = ctx.Err()
+				return
+			}
+		}
+	}()
+
+	<-done
+
+	if finalErr != nil {
+		return nil, finalErr
+	}
+
+	if finalEvent == nil {
+		return nil, fmt.Errorf("orchestration agent did not return a response")
+	}
+
+	printIntakeSummary(outputWriter, finalEvent)
+
+	fmt.Fprintf(outputWriter, "Intake transcript written to %s\n", logPath)
+
+	outcome := &IntakeOutcome{
+		RunID:       runID,
+		Instruction: instruction,
+		Discovery:   meta,
+		FinalEvent:  finalEvent,
+		LogPath:     logPath,
+		StartedAt:   startedAt,
+		CompletedAt: time.Now().UTC(),
+	}
+
+	if err := saveIntakeOutcome(workspaceRoot, outcome); err != nil {
+		return nil, err
+	}
+
+	return outcome, nil
+}
+
+func printIntakeSummary(w io.Writer, evt *protocol.Event) {
+	switch evt.Event {
+	case protocol.EventOrchestrationProposedTasks:
+		if planCandidates, ok := evt.Payload["plan_candidates"].([]any); ok && len(planCandidates) > 0 {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "Top plan candidates (%d):\n", len(planCandidates))
+			for idx, raw := range planCandidates {
+				if candidate, ok := raw.(map[string]any); ok {
+					path, _ := candidate["path"].(string)
+					score, _ := candidate["score"].(float64)
+					reason, _ := candidate["reason"].(string)
+					fmt.Fprintf(w, "  %d. %s (score %.2f)\n", idx+1, path, score)
+					if reason != "" {
+						fmt.Fprintf(w, "     %s\n", reason)
+					}
+				}
+			}
+		}
+	case protocol.EventOrchestrationNeedsClarification:
+		if questions, ok := evt.Payload["questions"].([]any); ok && len(questions) > 0 {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "Orchestration agent requested clarification (%d question(s)):\n", len(questions))
+			for idx, raw := range questions {
+				if q, ok := raw.(string); ok {
+					fmt.Fprintf(w, "  %d. %s\n", idx+1, q)
+				}
+			}
+		}
+	}
+}
+
+func saveIntakeOutcome(workspaceRoot string, outcome *IntakeOutcome) error {
+	stateDir := filepath.Join(workspaceRoot, "state", "intake")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create intake state directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(outcome, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal intake outcome: %w", err)
+	}
+
+	outPath := filepath.Join(stateDir, outcome.RunID+".json")
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write intake outcome: %w", err)
+	}
+
+	latestPath := filepath.Join(stateDir, "latest.json")
+	if err := os.WriteFile(latestPath, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write latest intake outcome: %w", err)
+	}
+
+	return nil
+}
+
+func promptForInstruction(r io.Reader, w io.Writer, tty bool) (string, error) {
+	reader := bufio.NewReader(r)
+	if tty {
+		fmt.Fprint(w, "lorch> What should I do? ")
+	}
+
+	line, err := reader.ReadString('\n')
+	if errors.Is(err, io.EOF) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return "", errInstructionRequired
+		}
+		if tty {
+			fmt.Fprintln(w)
+		}
+		return line, nil
+	}
+	if err != nil {
+		return "", err
+	}
+
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", errInstructionRequired
+	}
+	if tty {
+		fmt.Fprintln(w)
+	}
+	return line, nil
+}
+
+func buildIntakeCommand(runID string, inputs map[string]any, now time.Time, cfg *config.Config) (*protocol.Command, error) {
+	timeoutSeconds := resolveTimeout(cfg, "intake", 180)
+
+	command := &protocol.Command{
+		Kind:           protocol.MessageKindCommand,
+		MessageID:      fmt.Sprintf("cmd-%s", uuid.New().String()[:8]),
+		CorrelationID:  fmt.Sprintf("corr-intake-%s", uuid.New().String()[:8]),
+		TaskID:         runID,
+		IdempotencyKey: "",
+		To: protocol.AgentRef{
+			AgentType: protocol.AgentTypeOrchestration,
+		},
+		Action:          protocol.ActionIntake,
+		Inputs:          inputs,
+		ExpectedOutputs: []protocol.ExpectedOutput{},
+		Version: protocol.Version{
+			SnapshotID: fmt.Sprintf("snap-%s", runID),
+		},
+		Deadline: now.Add(time.Duration(timeoutSeconds) * time.Second),
+		Retry: protocol.Retry{
+			Attempt:     0,
+			MaxAttempts: cfg.Policy.Retry.MaxAttempts,
+		},
+		Priority: 5,
+	}
+
+	ik, err := idempotency.GenerateIK(command)
+	if err != nil {
+		return nil, err
+	}
+	command.IdempotencyKey = ik
+	return command, nil
+}
+
+func resolveTimeout(cfg *config.Config, action string, fallback int) int {
+	if cfg.Agents.Orchestration != nil {
+		if value, ok := cfg.Agents.Orchestration.TimeoutsS[action]; ok && value > 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func isTerminalFile(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
 // createAgentSupervisor creates an agent supervisor from config
