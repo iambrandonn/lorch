@@ -29,10 +29,6 @@ lorch will prompt for natural language instructions (Phase 2).`,
 	RunE: runRun,
 }
 
-func init() {
-	runCmd.Flags().StringP("task", "t", "", "Task ID to execute (e.g., T-0042)")
-}
-
 func runRun(cmd *cobra.Command, args []string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,

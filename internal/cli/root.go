@@ -27,6 +27,7 @@ func init() {
 
 	// Global flags
 	rootCmd.PersistentFlags().StringP("config", "c", "", "Path to lorch.json config file (default: search up directory tree)")
+	rootCmd.PersistentFlags().StringP("task", "t", "", "Task ID to execute (e.g., T-0042)")
 }
 
 // Execute runs the root command
