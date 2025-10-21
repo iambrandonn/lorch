@@ -2,6 +2,9 @@ package protocol
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +13,37 @@ import (
 
 func TestCommandSerialization(t *testing.T) {
 	deadline := time.Date(2025, 10, 19, 19, 0, 0, 0, time.UTC)
+
+	oi := OrchestrationInputs{
+		UserInstruction: "I've got a PLAN.md. Manage the implementation of it",
+		Discovery: &DiscoveryMetadata{
+			Root:        ".",
+			Strategy:    "heuristic:v1",
+			SearchPaths: []string{".", "docs", "specs", "plans"},
+			IgnoredPaths: []string{
+				".git",
+				"node_modules",
+			},
+			GeneratedAt: deadline.Add(-time.Minute),
+			Candidates: []DiscoveryCandidate{
+				{
+					Path:     "PLAN.md",
+					Score:    0.94,
+					Reason:   "filename matched plan heuristic",
+					Headings: []string{"# Implementation Plan"},
+				},
+				{
+					Path:   "docs/plan_v2.md",
+					Score:  0.61,
+					Reason: "contains heading similar to request",
+				},
+			},
+		},
+	}
+	inputs, err := oi.ToInputsMap()
+	if err != nil {
+		t.Fatalf("ToInputsMap() error: %v", err)
+	}
 
 	cmd := Command{
 		Kind:           MessageKindCommand,
@@ -21,9 +55,7 @@ func TestCommandSerialization(t *testing.T) {
 			AgentType: AgentTypeOrchestration,
 		},
 		Action: ActionIntake,
-		Inputs: map[string]any{
-			"user_instruction": "I've got a PLAN.md. Manage the implementation of it",
-		},
+		Inputs: inputs,
 		ExpectedOutputs: []ExpectedOutput{
 			{
 				Path:     "tasks/T-0050.plan.json",
@@ -64,6 +96,84 @@ func TestCommandSerialization(t *testing.T) {
 	}
 	if decoded.Action != ActionIntake {
 		t.Errorf("expected action=intake, got %s", decoded.Action)
+	}
+}
+
+func TestOrchestrationCommandGolden(t *testing.T) {
+	deadline := time.Date(2025, 10, 19, 19, 0, 0, 0, time.UTC)
+
+	inputs, err := (OrchestrationInputs{
+		UserInstruction: "I've got a PLAN.md. Manage the implementation of it",
+		Discovery: &DiscoveryMetadata{
+			Root:        ".",
+			Strategy:    "heuristic:v1",
+			SearchPaths: []string{".", "docs", "specs", "plans"},
+			IgnoredPaths: []string{
+				".git",
+				"node_modules",
+			},
+			GeneratedAt: deadline.Add(-time.Minute),
+			Candidates: []DiscoveryCandidate{
+				{
+					Path:     "PLAN.md",
+					Score:    0.94,
+					Reason:   "filename matched plan heuristic",
+					Headings: []string{"# Implementation Plan"},
+				},
+				{
+					Path:   "docs/plan_v2.md",
+					Score:  0.61,
+					Reason: "contains heading similar to request",
+				},
+			},
+		},
+	}).ToInputsMap()
+	if err != nil {
+		t.Fatalf("ToInputsMap() error: %v", err)
+	}
+
+	cmd := Command{
+		Kind:           MessageKindCommand,
+		MessageID:      "m-01",
+		CorrelationID:  "corr-intake-1",
+		TaskID:         "T-0050",
+		IdempotencyKey: "pending-ik:intake:T-0050",
+		To: AgentRef{
+			AgentType: AgentTypeOrchestration,
+		},
+		Action: ActionIntake,
+		Inputs: inputs,
+		ExpectedOutputs: []ExpectedOutput{
+			{
+				Path:     "tasks/T-0050.plan.json",
+				Required: true,
+			},
+		},
+		Version: Version{
+			SnapshotID: "snap-test-0001",
+		},
+		Deadline: deadline,
+		Retry: Retry{
+			Attempt:     0,
+			MaxAttempts: 3,
+		},
+		Priority: 5,
+	}
+
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		t.Fatalf("failed to marshal command: %v", err)
+	}
+
+	got := append(data, '\n')
+	goldenPath := filepath.Join("testdata", "orchestration_intake_command.golden.jsonl")
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("failed to read golden file: %v", err)
+	}
+
+	if diff := cmp.Diff(string(want), string(got)); diff != "" {
+		t.Errorf("golden mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -215,6 +325,104 @@ func TestArtifactProducedEvent(t *testing.T) {
 	}
 	if artifact.Size != 1432 {
 		t.Errorf("expected size=1432, got %d", artifact.Size)
+	}
+}
+
+func TestParseOrchestrationInputsRoundTrip(t *testing.T) {
+	now := time.Date(2025, 10, 21, 12, 0, 0, 0, time.UTC)
+	source := OrchestrationInputs{
+		UserInstruction: "Manage implementation of PLAN.md",
+		Discovery: &DiscoveryMetadata{
+			Root:        ".",
+			Strategy:    "heuristic:v1",
+			SearchPaths: []string{".", "docs"},
+			GeneratedAt: now,
+			Candidates: []DiscoveryCandidate{
+				{Path: "PLAN.md", Score: 0.9},
+			},
+		},
+		Context: map[string]any{
+			"selected_plan": "PLAN.md",
+		},
+	}
+
+	raw, err := source.ToInputsMap()
+	if err != nil {
+		t.Fatalf("ToInputsMap() error: %v", err)
+	}
+
+	parsed, err := ParseOrchestrationInputs(raw)
+	if err != nil {
+		t.Fatalf("ParseOrchestrationInputs() error: %v", err)
+	}
+
+	if diff := cmp.Diff(source.UserInstruction, parsed.UserInstruction); diff != "" {
+		t.Errorf("user instruction mismatch (-want +got):\n%s", diff)
+	}
+	if parsed.Discovery == nil {
+		t.Fatalf("expected discovery metadata")
+	}
+	if diff := cmp.Diff(source.Discovery.Root, parsed.Discovery.Root); diff != "" {
+		t.Errorf("discovery root mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(source.Discovery.Candidates, parsed.Discovery.Candidates); diff != "" {
+		t.Errorf("candidates mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(source.Context, parsed.Context); diff != "" {
+		t.Errorf("context mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestOrchestrationInputsValidateErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		inputs  OrchestrationInputs
+		wantErr string
+	}{
+		{
+			name:    "missing instruction",
+			inputs:  OrchestrationInputs{},
+			wantErr: ErrMissingUserInstruction.Error(),
+		},
+		{
+			name: "invalid discovery candidate",
+			inputs: OrchestrationInputs{
+				UserInstruction: "Do something",
+				Discovery: &DiscoveryMetadata{
+					Root:        ".",
+					Strategy:    "heuristic:v1",
+					SearchPaths: []string{"."},
+					Candidates: []DiscoveryCandidate{
+						{Path: "", Score: 1.1},
+					},
+				},
+			},
+			wantErr: ErrInvalidDiscoveryCandidate.Error(),
+		},
+		{
+			name: "empty candidates list",
+			inputs: OrchestrationInputs{
+				UserInstruction: "Do something",
+				Discovery: &DiscoveryMetadata{
+					Root:        ".",
+					Strategy:    "heuristic:v1",
+					SearchPaths: []string{"."},
+					Candidates:  []DiscoveryCandidate{},
+				},
+			},
+			wantErr: "candidates required",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.inputs.ToInputsMap(); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				if err == nil {
+					t.Fatalf("expected error containing %q but got nil", tc.wantErr)
+				}
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
 

@@ -29,12 +29,20 @@ const (
 type Action string
 
 const (
-	ActionImplement        Action = "implement"
+	// ActionImplement instructs the builder to produce an initial implementation for the task.
+	ActionImplement Action = "implement"
+	// ActionImplementChanges instructs the builder to respond to review/spec feedback.
 	ActionImplementChanges Action = "implement_changes"
-	ActionReview           Action = "review"
-	ActionUpdateSpec       Action = "update_spec"
-	ActionIntake           Action = "intake"
-	ActionTaskDiscovery    Action = "task_discovery"
+	// ActionReview instructs the reviewer to examine the latest builder output.
+	ActionReview Action = "review"
+	// ActionUpdateSpec instructs the spec maintainer to reconcile implementation with SPEC.md.
+	ActionUpdateSpec Action = "update_spec"
+	// ActionIntake asks the orchestration agent to translate an initial natural-language instruction
+	// into concrete plan candidates and derived task objects.
+	ActionIntake Action = "intake"
+	// ActionTaskDiscovery asks the orchestration agent to perform incremental task expansion mid-run,
+	// leveraging existing context (e.g., approved plans, current task state) to suggest next actions.
+	ActionTaskDiscovery Action = "task_discovery"
 )
 
 // AgentRef identifies an agent
@@ -65,19 +73,19 @@ type ExpectedOutput struct {
 
 // Command is sent from lorch to agents
 type Command struct {
-	Kind            MessageKind       `json:"kind"`
-	MessageID       string            `json:"message_id"`
-	CorrelationID   string            `json:"correlation_id"`
-	TaskID          string            `json:"task_id"`
-	IdempotencyKey  string            `json:"idempotency_key"`
-	To              AgentRef          `json:"to"`
-	Action          Action            `json:"action"`
-	Inputs          map[string]any    `json:"inputs"`
-	ExpectedOutputs []ExpectedOutput  `json:"expected_outputs"`
-	Version         Version           `json:"version"`
-	Deadline        time.Time         `json:"deadline"`
-	Retry           Retry             `json:"retry"`
-	Priority        int               `json:"priority"`
+	Kind            MessageKind      `json:"kind"`
+	MessageID       string           `json:"message_id"`
+	CorrelationID   string           `json:"correlation_id"`
+	TaskID          string           `json:"task_id"`
+	IdempotencyKey  string           `json:"idempotency_key"`
+	To              AgentRef         `json:"to"`
+	Action          Action           `json:"action"`
+	Inputs          map[string]any   `json:"inputs"`
+	ExpectedOutputs []ExpectedOutput `json:"expected_outputs"`
+	Version         Version          `json:"version"`
+	Deadline        time.Time        `json:"deadline"`
+	Retry           Retry            `json:"retry"`
+	Priority        int              `json:"priority"`
 }
 
 // Artifact describes a produced file
@@ -161,9 +169,9 @@ const (
 	EventReviewCompleted = "review.completed"
 
 	// Spec maintainer events
-	EventSpecUpdated           = "spec.updated"
-	EventSpecNoChangesNeeded   = "spec.no_changes_needed"
-	EventSpecChangesRequested  = "spec.changes_requested"
+	EventSpecUpdated          = "spec.updated"
+	EventSpecNoChangesNeeded  = "spec.no_changes_needed"
+	EventSpecChangesRequested = "spec.changes_requested"
 
 	// Orchestration events
 	EventOrchestrationProposedTasks      = "orchestration.proposed_tasks"
