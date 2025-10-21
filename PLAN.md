@@ -129,18 +129,43 @@ Deliver `lorch run` with builder/reviewer/spec-maintainer agents, deterministic 
 - ✅ `.golangci.yml`, README quick start, `docs/AGENT-SHIMS.md`, and `docs/releases/P1.5.md` document tooling, shims, and release artifacts.
 
 ## Phase 2 – Natural Language Task Intake
-Add orchestration agent flow and human-in-the-loop approvals.
+Introduce the orchestration agent, add NL intake flows, and route approved plans into the existing implement → review → spec maintenance loop.
 
-- **Console interaction loop**
-  - Prompt user for NL instruction when `--task` absent; stream agent transcripts to console.
-- **Orchestration protocol**
-  - Send `intake`/`task_discovery` commands, handle `orchestration.proposed_tasks` and `needs_clarification`, capture `system.user_decision`.
-- **Task activation pipeline**
-  - Materialize approved tasks into the Phase 1 execution loop with appropriate idempotency metadata.
-- **UX polish**
-  - Provide clear prompts for clarifications, approval summaries, and conflict messaging.
-- **Testing**
-  - Mock-agent scenarios covering successful intake, clarification loop, and user-denied plans.
+### P2.1 Milestone – Orchestration Agent Foundations
+- **Tests first**: golden NDJSON fixtures for `intake`/`task_discovery` commands, heartbeat cadence validation, and deterministic file discovery snapshots.
+- **Task A**: define orchestration agent contract in `internal/protocol` (schemas, enums, validation errors) including explicit payload slots for discovery metadata supplied by lorch; document semantics for `intake` (initial NL → tasks) vs `task_discovery` (incremental expansion) alongside action enums.
+- **Task B**: scaffold `cmd/claude-agent --role orchestration` shim with env templating (`CLAUDE_ROLE`, workspace paths, log flags); clarify scope as a transport wrapper around the user-provided LLM CLI.
+- **Task C**: add mock harness that replays scripted NDJSON transcripts for unit tests and local smoke runs.
+- **Task D**: implement a deterministic file discovery service inside lorch (`internal/discovery`) that walks allowed paths (§10.4), ranks candidates, injects results into orchestration command inputs, and documents the determinism contract (sorted traversal, stable scoring, snapshot coupling).
+- **Exit criteria**: shim can echo canned `orchestration.proposed_tasks` payloads with heartbeats under test, and the discovery service produces stable ranked outputs that match fixtures and published determinism notes.
+
+### P2.2 Milestone – CLI Intake Loop
+- **Tests first**: CLI interaction tests covering instruction prompt, cancellation, transcript streaming, and non-TTY behaviour (stdin fallback / failure modes).
+- **Task A**: extend `lorch run` to detect missing `--task` and prompt for NL instruction (TTY prompt plus documented non-TTY behaviour).
+- **Task B**: wire intake transcript streaming into console/logs while honoring heartbeat liveness checks.
+- **Task C**: persist the raw intake conversation to `/events/<run>-intake.ndjson` with timing metadata.
+- **Exit criteria**: manual smoke run shows prompt → intake transcript mirrored to console and events log; non-TTY path covered by automated test.
+
+### P2.3 Milestone – Plan Negotiation & Approvals
+- **Tests first**: orchestration loop tests covering `proposed_tasks`, `needs_clarification`, `task_discovery`, multi-candidate selections, and user decline flows.
+- **Task A**: implement message router that relays orchestration envelopes (both `intake` and `task_discovery`) and enforces required responses.
+- **Task B**: capture `system.user_decision` records (approve/deny/clarify) with correlation and persist to ledger + `/state/run.json`; ensure repeated clarifications reuse the original idempotency key with updated inputs.
+- **Task C**: surface conflicts and clarifying questions to the user with clear retry/abort options, including numbered menus for multi-candidate approval and a "none" escape hatch.
+- **Exit criteria**: approval loop records user decisions, handles clarifications with stable IKs, supports `task_discovery`, and exits cleanly on deny or "none" selection.
+
+### P2.4 Milestone – Task Activation Pipeline
+- **Tests first**: integration test driving orchestration output into builder/reviewer/spec-maintainer mocks, plus regression for `task_discovery` follow-up tasks.
+- **Task A**: map approved plan objects into concrete task IDs, snapshots, and idempotency keys.
+- **Task B**: enqueue tasks into the existing scheduler while preserving implement → review → spec-maintainer ordering and supporting additional `task_discovery` cycles mid-run.
+- **Task C**: ensure receipts/artifact metadata reflect intake origin (task titles, rationale, discovery id) for traceability.
+- **Exit criteria**: automated end-to-end test validates instruction → approval → implement/review/spec-maintainer completion with recorded traceability fields.
+
+### P2.5 Milestone – UX Polish & Documentation
+- **Tests first**: snapshot tests for console messaging, including conflict summaries, approval confirmations, and multi-candidate menus.
+- **Task A**: refine copy for prompts, conflict surfacing, approval menus, and success summaries based on spec guidelines.
+- **Task B**: update `docs/AGENT-SHIMS.md`, README, and new orchestration prompt template examples with shim scope, discovery behaviour, and mock mode usage.
+- **Task C**: add regression tests for denied approvals, retry flows, and non-TTY intake to guard against future regressions.
+- **Exit criteria**: documentation refreshed, UX copy stabilized, and regression suite green.
 
 ## Phase 3 – Interactive Configuration
 Ship `lorch config`, validation enhancements, and flexible agent/tool settings.
