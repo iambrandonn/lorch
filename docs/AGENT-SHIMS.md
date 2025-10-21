@@ -4,12 +4,12 @@ The orchestrator treats every agent as a thin CLI process that speaks NDJSON ove
 
 ## Executables & Roles
 
-| Role             | Purpose                                               | Default command (lorch.json)              |
-|------------------|-------------------------------------------------------|-------------------------------------------|
-| builder          | Applies code/test changes and reports artefacts/tests | `./mockagent -type builder` (mock mode)   |
-| reviewer         | Reviews changes and emits `review.completed`          | `./mockagent -type reviewer`              |
-| spec_maintainer  | Verifies SPEC.md coverage / updates allowed sections  | `./mockagent -type spec_maintainer`       |
-| orchestration    | (Phase 2+) task intake / planning                     | Disabled in Phase 1; shim available       |
+| Role             | Purpose                                               | Default command (lorch.json)                             |
+|------------------|-------------------------------------------------------|----------------------------------------------------------|
+| builder          | Applies code/test changes and reports artefacts/tests | `./mockagent -type builder` (mock mode)                  |
+| reviewer         | Reviews changes and emits `review.completed`          | `./mockagent -type reviewer`                             |
+| spec_maintainer  | Verifies SPEC.md coverage / updates allowed sections  | `./mockagent -type spec_maintainer`                      |
+| orchestration    | (Phase 2+) task intake / planning                     | `./claude-agent --role orchestration --` (Phase 2 shim)  |
 
 Swap in a different model by replacing the `cmd` array in `lorch.json` (e.g. `claude`, `openai`, `python script.py`). Lorch passes no hidden arguments; everything after `cmd[0]` is under your control.
 
@@ -19,6 +19,23 @@ Set per-agent env in the config file:
 
 - `CLAUDE_AGENT_ROLE` – free-form hint for prompt templating. The mock agent ignores it; real shims can embed role-specific behaviour.
 - `WORKSPACE_ROOT`, `LOG_LEVEL`, tokens, etc. – add whatever your shim needs. They are exported exactly as listed.
+
+### Claude Agent Shim (`cmd/claude-agent`)
+
+The Phase 2 shim wraps the real Claude CLI (or any compatible binary) and injects environment variables. Example usage:
+
+```bash
+./claude-agent \
+  --role orchestration \
+  --workspace /Users/me/lorch \
+  --log-level debug \
+  -- --model claude-3-5-sonnet
+```
+
+- `CLAUDE_ROLE`, `CLAUDE_WORKSPACE`, and `CLAUDE_LOG_LEVEL` are exported automatically.
+- Additional args after `--` are passed directly to the underlying CLI.
+- Use `--fixture path/to/script.jsonl` to set `CLAUDE_FIXTURE`, enabling deterministic playback for tests and smoke runs.
+- Override the binary with `--bin /custom/path` or set `CLAUDE_CLI` in your environment.
 
 ## Mock Agent (cmd/mockagent)
 
