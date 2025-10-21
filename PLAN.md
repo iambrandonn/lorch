@@ -131,13 +131,65 @@ Deliver `lorch run` with builder/reviewer/spec-maintainer agents, deterministic 
 ## Phase 2 – Natural Language Task Intake
 Introduce the orchestration agent, add NL intake flows, and route approved plans into the existing implement → review → spec maintenance loop.
 
-### P2.1 Milestone – Orchestration Agent Foundations
-- **Tests first**: golden NDJSON fixtures for `intake`/`task_discovery` commands, heartbeat cadence validation, and deterministic file discovery snapshots.
-- **Task A**: define orchestration agent contract in `internal/protocol` (schemas, enums, validation errors) including explicit payload slots for discovery metadata supplied by lorch; document semantics for `intake` (initial NL → tasks) vs `task_discovery` (incremental expansion) alongside action enums.
-- **Task B**: scaffold `cmd/claude-agent --role orchestration` shim with env templating (`CLAUDE_ROLE`, workspace paths, log flags); clarify scope as a transport wrapper around the user-provided LLM CLI.
-- **Task C**: add mock harness that replays scripted NDJSON transcripts for unit tests and local smoke runs.
-- **Task D**: implement a deterministic file discovery service inside lorch (`internal/discovery`) that walks allowed paths (§10.4), ranks candidates, injects results into orchestration command inputs, and documents the determinism contract (sorted traversal, stable scoring, snapshot coupling).
-- **Exit criteria**: shim can echo canned `orchestration.proposed_tasks` payloads with heartbeats under test, and the discovery service produces stable ranked outputs that match fixtures and published determinism notes.
+### P2.1 Milestone – Orchestration Agent Foundations ✅ **COMPLETE**
+> **Status**: Completed 2025-10-21
+> **Summary**: Orchestration agent contract, shim infrastructure, fixture-based mock harness, and deterministic file discovery service fully implemented and tested. All foundation pieces for Phase 2 NL intake workflow are now in place.
+
+- **Tests first** ✅
+  - ✅ Golden NDJSON fixtures for `intake`/`task_discovery` commands
+  - ✅ Heartbeat cadence validation (starting/busy/ready lifecycle)
+  - ✅ Deterministic file discovery snapshots
+  - ✅ Protocol round-trip tests and validation error coverage
+
+- **Task A – Orchestration Agent Contract** ✅
+  - ✅ `internal/protocol/orchestration.go` with `OrchestrationInputs`, `DiscoveryMetadata`, `DiscoveryCandidate` types
+  - ✅ Action enums for `ActionIntake` and `ActionTaskDiscovery` with semantic documentation
+  - ✅ Event constants: `EventOrchestrationProposedTasks`, `EventOrchestrationNeedsClarification`, `EventOrchestrationPlanConflict`
+  - ✅ Validation errors: `ErrMissingUserInstruction`, `ErrInvalidDiscoveryCandidate`
+  - ✅ Golden test: `testdata/orchestration_intake_command.golden.jsonl`
+  - **Delivered**: Complete protocol foundation with bidirectional conversion (`ToInputsMap`/`ParseOrchestrationInputs`)
+
+- **Task B – Agent Shim Scaffolding** ✅
+  - ✅ `cmd/claude-agent` supporting all 4 agent roles (builder, reviewer, spec_maintainer, orchestration)
+  - ✅ Environment templating: `CLAUDE_ROLE`, `CLAUDE_WORKSPACE`, `CLAUDE_LOG_LEVEL`, `CLAUDE_FIXTURE`
+  - ✅ Binary override via `--bin` flag or `$CLAUDE_CLI` env var
+  - ✅ Workspace validation and absolute path resolution
+  - ✅ Passthrough args via `--` separator
+  - ✅ Updated `docs/AGENT-SHIMS.md` with comprehensive usage examples
+  - **Delivered**: Generic transport wrapper with 5 passing tests, production-ready
+
+- **Task C – Mock Harness** ✅
+  - ✅ `cmd/claude-fixture` CLI binary for replaying scripted NDJSON responses
+  - ✅ `internal/fixtureagent` package with protocol-compliant event/heartbeat emission
+  - ✅ `internal/agent/script` shared script format (refactored from mockagent)
+  - ✅ `testdata/fixtures/orchestration-simple.json` with `intake` and `task_discovery` responses
+  - ✅ Heartbeat lifecycle (starting → busy → ready) with configurable intervals
+  - ✅ Integration verified: `claude-agent` → `claude-fixture` → `orchestration.proposed_tasks`
+  - **Delivered**: Complete fixture framework with 2 passing tests, deterministic and CI-ready
+
+- **Task D – File Discovery Service** ✅
+  - ✅ `internal/discovery` package with `Discover()` function
+  - ✅ Configurable search paths (default: `".", "docs", "specs", "plans"`)
+  - ✅ Scoring algorithm: filename tokens, directory location, depth penalty, heading matches
+  - ✅ Deterministic guarantees: sorted traversal, stable ranking (score DESC → path ASC), path normalization
+  - ✅ Returns `*protocol.DiscoveryMetadata` for direct injection into orchestration commands
+  - ✅ Package documentation explaining determinism contract and snapshot coupling
+  - ✅ Security: path traversal protection, hidden file exclusion, read limits
+  - **Delivered**: Robust discovery service with 4 passing tests, strategy versioning (`heuristic:v1`)
+
+- **Exit criteria** ✅ **MET**
+  - ✅ Shim echoes canned `orchestration.proposed_tasks` payloads (verified end-to-end)
+  - ✅ Heartbeats emit correctly under test (starting/busy/ready lifecycle validated)
+  - ✅ Discovery produces stable ranked outputs (determinism tests passing)
+  - ✅ Outputs match protocol fixtures (golden test + integration verified)
+  - ✅ Determinism notes published (package doc in `internal/discovery`)
+
+**Deliverables**:
+- 📦 4 new packages: `protocol/orchestration`, `fixtureagent`, `agent/script`, `discovery`
+- 🔧 2 new binaries: `claude-agent`, `claude-fixture`
+- 📝 1 fixture: `orchestration-simple.json`
+- 🧪 Test coverage: 13 new tests across all packages (all passing)
+- 📊 Review documents: P2.1-TASK-A through P2.1-TASK-D final reviews
 
 ### P2.2 Milestone – CLI Intake Loop
 - **Tests first**: CLI interaction tests covering instruction prompt, cancellation, transcript streaming, and non-TTY behaviour (stdin fallback / failure modes).
@@ -204,7 +256,7 @@ Improve diagnostics, recovery, and human control.
 2. Prototype orchestration-agent shim contract updates (inputs/outputs, env vars) ahead of implementation.
 3. Extend smoke fixtures to cover change-request iterations in preparation for Phase 2 regression coverage.
 
-### Current Status (2025-10-20)
+### Current Status (2025-10-21)
 **Phase 1 Complete**: Milestones P1.1 through P1.5 are delivered with passing tests, release tooling, and documentation. The orchestrator now:
 - Captures deterministic snapshots and idempotency keys.
 - Schedules builder → reviewer → spec-maintainer loops with enforced test reporting and granular resume.
@@ -212,4 +264,11 @@ Improve diagnostics, recovery, and human control.
 - Publishes cross-platform binaries (`lorch release`), smoke-validates them, and runs lint/unit/smoke checks in CI.
 - Documents agent shims and release artefacts for local operation.
 
-**Ready for Phase 2**: Natural Language Task Intake (orchestration agent + approval workflow).
+**Phase 2.1 Complete**: Orchestration Agent Foundations delivered. The system now has:
+- Orchestration protocol types (OrchestrationInputs, DiscoveryMetadata, event schemas).
+- Generic agent shim (`claude-agent`) with environment templating for all agent roles.
+- Fixture-based mock harness (`claude-fixture`) for deterministic testing without LLM calls.
+- Deterministic file discovery service (`internal/discovery`) with stable candidate ranking.
+- All foundation pieces tested and integration-verified end-to-end.
+
+**Ready for Phase 2.2**: CLI Intake Loop (detect missing --task, prompt for NL instruction, stream orchestration transcripts).
