@@ -310,6 +310,24 @@ Return an error instead of events:
 
 ---
 
+### 4. Orchestration Intake (`orchestration-simple.json`)
+
+Provides canned responses for orchestration `intake` and `task_discovery` actions. Useful when exercising the Phase 2 NL intake shim and fixture-based smoke tests.
+
+```bash
+CLAUDE_ROLE=orchestration \
+CLAUDE_FIXTURE=testdata/fixtures/orchestration-simple.json \
+./claude-fixture --no-heartbeat
+```
+
+**Responses**:
+- `intake` → `orchestration.proposed_tasks` with two candidate plans and derived tasks
+- `task_discovery` → `orchestration.proposed_tasks` follow-up with notes
+
+Combine with the `claude-agent` shim by setting `CLAUDE_CLI=./claude-fixture` and passing the fixture path via `CLAUDE_FIXTURE` (or `--fixture`).
+
+---
+
 ## Integration with Tests
 
 ### Go Integration Tests

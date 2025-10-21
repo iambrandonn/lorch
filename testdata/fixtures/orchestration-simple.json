@@ -1,0 +1,44 @@
+{
+  "responses": {
+    "intake": {
+      "events": [
+        {
+          "type": "orchestration.proposed_tasks",
+          "payload": {
+            "plan_candidates": [
+              {"path": "PLAN.md", "confidence": 0.82},
+              {"path": "docs/plan_v2.md", "confidence": 0.61}
+            ],
+            "derived_tasks": [
+              {
+                "id": "T-100",
+                "title": "Mock task from intake",
+                "files": ["src/example.go"]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "task_discovery": {
+      "events": [
+        {
+          "type": "orchestration.proposed_tasks",
+          "payload": {
+            "plan_candidates": [
+              {"path": "PLAN.md", "confidence": 0.85}
+            ],
+            "derived_tasks": [
+              {
+                "id": "T-100-2",
+                "title": "Follow-up task",
+                "files": ["src/example_followup.go"]
+              }
+            ],
+            "notes": "Additional context from scripted discovery"
+          }
+        }
+      ]
+    }
+  }
+}

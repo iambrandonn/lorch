@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/iambrandonn/lorch/internal/agent/script"
 	"github.com/iambrandonn/lorch/internal/ndjson"
 	"github.com/iambrandonn/lorch/internal/protocol"
 )
@@ -63,16 +63,16 @@ func main() {
 
 	// Create agent
 	agent := &MockAgent{
-		agentType:         agentTypeEnum,
-		agentID:           *agentID,
-		logger:            logger,
-		encoder:           ndjson.NewEncoder(os.Stdout, logger),
-		decoder:           ndjson.NewDecoder(os.Stdin, logger),
-		heartbeatInterval: *heartbeatInterval,
-		disableHeartbeat:  *disableHeartbeat,
-		startTime:         time.Now(),
-		pid:               os.Getpid(),
-		ppid:              os.Getppid(),
+		agentType:          agentTypeEnum,
+		agentID:            *agentID,
+		logger:             logger,
+		encoder:            ndjson.NewEncoder(os.Stdout, logger),
+		decoder:            ndjson.NewDecoder(os.Stdin, logger),
+		heartbeatInterval:  *heartbeatInterval,
+		disableHeartbeat:   *disableHeartbeat,
+		startTime:          time.Now(),
+		pid:                os.Getpid(),
+		ppid:               os.Getppid(),
 		reviewChangesCount: *reviewChangesCount,
 		specChangesCount:   *specChangesCount,
 	}
@@ -128,59 +128,18 @@ type MockAgent struct {
 	lastActivityAt  time.Time
 	currentTaskID   string
 	status          protocol.HeartbeatStatus
-	script          *Script
+	script          *script.Script
 	reviewCallCount int // Counter for review calls
 	specCallCount   int // Counter for spec calls
 }
 
-// Script contains pre-programmed responses
-type Script struct {
-	// Maps action name to response template
-	Responses map[string]ResponseTemplate `json:"responses"`
-}
-
-// ResponseTemplate defines how to respond to a command
-type ResponseTemplate struct {
-	// Events to send in response (will be sent in order)
-	Events []EventTemplate `json:"events"`
-	// Optional delay before sending events
-	DelayMs int `json:"delay_ms,omitempty"`
-	// Error to return instead of sending events
-	Error string `json:"error,omitempty"`
-}
-
-// EventTemplate defines an event to send
-type EventTemplate struct {
-	// Event type (e.g., "builder.completed")
-	Type string `json:"type"`
-	// Event status (optional, e.g., "approved")
-	Status string `json:"status,omitempty"`
-	// Event payload
-	Payload map[string]any `json:"payload,omitempty"`
-	// Artifacts to include
-	Artifacts []ArtifactTemplate `json:"artifacts,omitempty"`
-}
-
-// ArtifactTemplate defines an artifact
-type ArtifactTemplate struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
-	Size   int64  `json:"size"`
-}
-
 func (a *MockAgent) loadScript(path string) error {
-	data, err := os.ReadFile(path)
+	loaded, err := script.Load(path)
 	if err != nil {
-		return fmt.Errorf("failed to read script file: %w", err)
+		return err
 	}
-
-	var script Script
-	if err := json.Unmarshal(data, &script); err != nil {
-		return fmt.Errorf("failed to parse script JSON: %w", err)
-	}
-
-	a.script = &script
-	a.logger.Info("loaded script", "path", path, "actions", len(script.Responses))
+	a.script = loaded
+	a.logger.Info("loaded script", "path", path, "actions", len(loaded.Responses))
 	return nil
 }
 
@@ -338,7 +297,7 @@ func (a *MockAgent) handleCommand(cmd *protocol.Command) error {
 	}
 }
 
-func (a *MockAgent) executeScriptedResponse(cmd *protocol.Command, template ResponseTemplate) error {
+func (a *MockAgent) executeScriptedResponse(cmd *protocol.Command, template script.ResponseTemplate) error {
 	// Check if this is an error response
 	if template.Error != "" {
 		a.logger.Info("returning scripted error", "error", template.Error)

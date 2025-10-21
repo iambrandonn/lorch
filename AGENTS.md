@@ -65,6 +65,7 @@ This document summarizes the agents referenced in the spec (`MASTER-SPEC.md`) an
 - Translate incoming `command` JSON into prompt text for the CLI tool; parse the CLI response back into required `event` payloads.
 - For tests, offer a mock mode that replays scripted responses without invoking the real LLM.
 - Ensure stderr is used only for diagnostics; stdout must stay reserved for NDJSON protocol messages.
+- End-to-end `go test ./...` runs can exceed default CLI timeouts; when executing the full suite, increase the shell command timeout (e.g., ≥60 s) so longer integration tests are not interrupted.
 
 ## Future Extensions
 - Add support for alternative LLM CLIs (OpenAI, local models) by swapping the underlying prompt invocation while preserving the shim interface.
