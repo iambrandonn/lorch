@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ github.workspace }}/.gocache
+      GOMODCACHE: ${{ github.workspace }}/.gomodcache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Prepare cache directories
+        run: |
+          mkdir -p "$GOCACHE" "$GOMODCACHE"
+          mkdir -p logs/ci/${{ github.run_id }}
+
+      - name: Install golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.58.1
+
+      - name: Run golangci-lint
+        run: |
+          set -euo pipefail
+          golangci-lint run --config .golangci.yml | tee logs/ci/${{ github.run_id }}/lint.txt
+
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+          go test ./... | tee logs/ci/${{ github.run_id }}/go-test.txt
+
+      - name: Run smoke tests
+        run: |
+          set -euo pipefail
+          go test ./pkg/testharness -run TestRunSmokeSimpleSuccess -v | tee logs/ci/${{ github.run_id }}/smoke.txt
+
+      - name: Upload CI logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs-${{ github.run_id }}
+          path: logs/ci/${{ github.run_id }}
+          if-no-files-found: warn

@@ -119,12 +119,14 @@ Deliver `lorch run` with builder/reviewer/spec-maintainer agents, deterministic 
 - 🐛 1 critical bug fix (terminal event classification)
 - 📊 Implementation summary: `P1.4-IMPLEMENTATION-SUMMARY.md`
 
-### P1.5 Milestone – QA, Packaging & Docs
-- **Tests first**: finalize smoke-test script using mock agents; ensure CI pipeline executes it.
-- **Task A**: configure build scripts for macOS/Linux (amd64/arm64) static binaries; document instructions.
-- **Task B**: integrate formatting/linting tools (`go fmt`, `go vet`, `golangci-lint` or equivalent) into CI.
-- **Task C**: write onboarding docs (README, agent shim guide, Phase 1 feature list).
-- **Exit criteria**: CI green with smoke tests + lint/format; documented release binaries produced.
+### P1.5 Milestone – QA, Packaging & Docs ✅ **COMPLETE**
+> **Summary**: Release tooling, lint/test automation, and documentation landed. `lorch release` now builds cross-platform binaries with smoke validation; CI runs lint → unit → smoke pipelines, and docs cover usage through Phase 1.
+
+- ✅ `lorch release` command builds darwin/linux (amd64 + arm64) binaries, writes `dist/manifest.json`, and records smoke outcomes per target (skipping non-native architectures when needed).
+- ✅ `internal/release` package encapsulates manifest generation and smoke gating with unit coverage.
+- ✅ `pkg/testharness` provides reusable binary builds and smoke scenarios; `TestRunSmokeSimpleSuccess` ensures mock-agent flows stay green.
+- ✅ GitHub Actions workflow (`.github/workflows/ci.yml`) runs `golangci-lint`, `go test ./...`, and the smoke harness while archiving logs under `logs/ci/<run-id>/`.
+- ✅ `.golangci.yml`, README quick start, `docs/AGENT-SHIMS.md`, and `docs/releases/P1.5.md` document tooling, shims, and release artifacts.
 
 ## Phase 2 – Natural Language Task Intake
 Add orchestration agent flow and human-in-the-loop approvals.
@@ -173,20 +175,16 @@ Improve diagnostics, recovery, and human control.
   - Plan for optional logging verbosity, trace IDs, and hooks for future analytics (without violating local-first goals).
 
 ## Next Steps
-✅ ~~1. Decompose P1.3 tasks (A–E) into implementation issues with clear dependencies and owners.~~ **DONE**
-✅ ~~2. Finalize snapshot/ledger schemas (JSON shapes) and document them for reference before coding Task A/B.~~ **DONE**
-✅ ~~3. Prepare crash/restart test harness (mock agent scripts, test data directories) to support Task D integration tests.~~ **DONE**
+1. Draft Phase 2 intake UX specification (console prompts, approval loop, transcript expectations).
+2. Prototype orchestration-agent shim contract updates (inputs/outputs, env vars) ahead of implementation.
+3. Extend smoke fixtures to cover change-request iterations in preparation for Phase 2 regression coverage.
 
 ### Current Status (2025-10-20)
-**Phase 1.3 Complete**: All core idempotency and persistence functionality is implemented and tested. The orchestrator can now:
-- Capture workspace snapshots with deterministic IDs
-- Generate idempotency keys for crash recovery
-- Persist run state and event ledgers
-- Resume interrupted runs without duplicate work
-- Handle crashes gracefully with full state recovery
+**Phase 1 Complete**: Milestones P1.1 through P1.5 are delivered with passing tests, release tooling, and documentation. The orchestrator now:
+- Captures deterministic snapshots and idempotency keys.
+- Schedules builder → reviewer → spec-maintainer loops with enforced test reporting and granular resume.
+- Persists receipts, events, and run state for crash-safe restarts.
+- Publishes cross-platform binaries (`lorch release`), smoke-validates them, and runs lint/unit/smoke checks in CI.
+- Documents agent shims and release artefacts for local operation.
 
-**Remaining P1.3 Supplements** (optional enhancements):
-- JSON schemas for validation (`schemas/v1/*.json`)
-- Mock agent script support (`mockagent --script fixture.json`)
-
-**Ready for P1.4**: Builder/Test Enforcement & Spec Loop Closure
+**Ready for Phase 2**: Natural Language Task Intake (orchestration agent + approval workflow).
