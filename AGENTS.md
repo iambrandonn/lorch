@@ -67,6 +67,51 @@ This document summarizes the agents referenced in the spec (`MASTER-SPEC.md`) an
 - Ensure stderr is used only for diagnostics; stdout must stay reserved for NDJSON protocol messages.
 - End-to-end `go test ./...` runs can exceed default CLI timeouts; when executing the full suite, increase the shell command timeout (e.g., ≥60 s) so longer integration tests are not interrupted.
 
+## Development Documentation Practices (For LLM Agents)
+
+When working on this project, AI agents should create consolidated documentation to preserve context for future agents and human contributors.
+
+### Documentation Approach
+
+**Keep in `docs/development/`**:
+- Phase summaries: One consolidated document per milestone (e.g., `phase-2.1.md`)
+- Key design decisions with rationale
+- Integration examples for future phases
+- Lessons learned and improvements made
+
+**Can discard after consolidation**:
+- Intermediate review drafts (superseded by final reviews)
+- Planning documents (after milestone completion)
+- Iteration artifacts (keep outcomes, not process details)
+
+### Creating Phase Summaries
+
+**When**: After completing all tasks in a milestone
+
+**Structure**:
+- Overview: What was delivered and why
+- Per-task breakdown: What was built, key decisions, testing approach
+- Integration points: How future work uses these deliverables
+- Deliverables summary: Packages, binaries, tests, docs created
+- Lessons learned: What worked, improvements made
+
+**Reference example**: See `docs/development/phase-2.1.md`
+
+### Workflow Pattern
+
+1. **During development**: Create detailed task reviews (e.g., `P2.1-TASK-A-REVIEW.md`) for immediate feedback
+2. **After milestone**: Consolidate reviews into one phase summary in `docs/development/`
+3. **Clean up**: Delete intermediate review files, keep only the consolidated summary
+
+### Benefits
+
+- Cleaner repository (no review clutter in root)
+- Easier onboarding (read phase summaries to understand what exists)
+- Preserved context (design decisions documented for future reference)
+- Maintainable pattern (scales as project grows)
+
+**Index**: Maintain `docs/development/README.md` linking to all phase summaries
+
 ## Future Extensions
 - Add support for alternative LLM CLIs (OpenAI, local models) by swapping the underlying prompt invocation while preserving the shim interface.
 - Consider per-agent configuration in `lorch.json` for model selection, temperature, or additional tooling hooks.
