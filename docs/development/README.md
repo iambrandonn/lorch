@@ -125,12 +125,18 @@ When in doubt, consolidate multiple documents into a single phase summary rather
   - Deterministic file discovery service
 - **[Phase 2.2: CLI Intake Loop](./phase-2.2.md)** ✅
 - **[Phase 2.3: Plan Negotiation & Approvals](./phase-2.3.md)** ✅ (Summary; see [final review](./phase-2.3-review-final.md))
+- **[Phase 2.5: UX Polish & Documentation (Unit Tests)](./phase-2.5.md)** ✅
+  - Transcript formatter tests (10 tests - event/heartbeat/command formatting)
+  - Console output snapshot tests (12 tests - user-facing prompts and menus)
+  - Prompting edge cases tests (15 tests - input validation and retries)
+  - Total: 37 new tests, 118 sub-tests, all passing
+  - Review fixes: Extracted helper functions, fixed clarification retry bug, added retry tests
+  - Note: Tasks A (copy refinement) and B (documentation) pending
 - **[Phase 2.4: Task Activation Pipeline](./phase-2.4.md)** ✅
   - Task A: Activation mapping (intake approvals → concrete tasks)
   - Task B: Scheduler integration (task execution with metadata preservation)
   - Task C: Receipt traceability (intake origin metadata in all receipts)
   - See also: [Task A details](./phase-2.4-task-a.md), [Task C details](./phase-2.4-task-c.md), [Test Plan](./phase-2.4-test-plan.md)
-- **Phase 2.5: UX Polish & Documentation** (planned)
 
 ### Phase 3: Interactive Configuration
 *(Not yet started)*

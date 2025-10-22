@@ -290,7 +290,7 @@ Improve diagnostics, recovery, and human control.
 2. Prototype orchestration-agent shim contract updates (inputs/outputs, env vars) ahead of implementation.
 3. Extend smoke fixtures to cover change-request iterations in preparation for Phase 2 regression coverage.
 
-### Current Status (2025-10-21)
+### Current Status (2025-10-22)
 **Phase 1 Complete**: Milestones P1.1 through P1.5 are delivered with passing tests, release tooling, and documentation. The orchestrator now:
 - Captures deterministic snapshots and idempotency keys.
 - Schedules builder → reviewer → spec-maintainer loops with enforced test reporting and granular resume.
@@ -321,7 +321,17 @@ Improve diagnostics, recovery, and human control.
 - Supports intake resumability with pending command reconstruction.
 - Extracts magic strings to constants for maintainability.
 
-**Phase 2.4 (In Progress)**: Task Activation Pipeline
-- Task A Complete ✅: Activation package with task preparation and command building
-- Task B Complete ✅: Task execution pipeline integrated (intake → activation → scheduler)
-- **Ready for Task C**: Add intake traceability metadata to receipts and artifacts
+**Phase 2.4 Complete**: Task Activation Pipeline delivered. The system now:
+- Activation package: Maps approved plans/tasks to concrete scheduler inputs with metadata preservation
+- Task execution pipeline: Integrates intake flow → activation → scheduler with full traceability
+- Receipt traceability: Adds 6 intake origin fields (run ID, instruction, plan, tasks, clarifications, conflicts) to all task receipts
+- Snapshot restoration: Gracefully handles missing snapshots by recreating from discovery
+- Full test coverage: Unit tests for activation, scheduler integration, and edge cases
+
+**Phase 2.5 (Unit Tests Complete)**: UX Polish & Documentation – Test Implementation ✅
+- Snapshot tests: 37 new tests (118 sub-tests) validating console output, transcript formatting, and edge cases
+- Review fixes applied: Extracted helper functions (`printApprovalConfirmation`, `printDiscoveryMessage`) for testability
+- Clarification retry bug fixed: Changed loop from range to indexed to support `i--` retry logic
+- Added retry tests: Comprehensive validation of empty answer retry behavior
+- All tests passing: Full regression suite green
+- **Pending**: Task A (UX copy refinement) and Task B (documentation updates)

@@ -307,8 +307,7 @@ func runIntakeFlow(cmd *cobra.Command, cfg *config.Config, workspaceRoot string,
 			return nil, err
 		}
 
-		fmt.Fprintln(outputWriter)
-		fmt.Fprintln(outputWriter, "Running workspace discovery...")
+		printDiscoveryMessage(outputWriter)
 
 		meta, err := discovery.Discover(discovery.DefaultConfig(workspaceRoot))
 		if err != nil {
@@ -728,12 +727,7 @@ func runIntakeFlow(cmd *cobra.Command, cfg *config.Config, workspaceRoot string,
 		return nil, err
 	}
 
-	fmt.Fprintln(outputWriter)
-	fmt.Fprintf(outputWriter, "Approved plan: %s\n", decision.ApprovedPlan)
-	if len(decision.ApprovedTasks) > 0 {
-		fmt.Fprintf(outputWriter, "Approved tasks: %s\n", strings.Join(decision.ApprovedTasks, ", "))
-	}
-	fmt.Fprintf(outputWriter, "Intake transcript written to %s\n", logPath)
+	printApprovalConfirmation(outputWriter, decision.ApprovedPlan, decision.ApprovedTasks, logPath)
 
 	var outcomeDiscovery *protocol.DiscoveryMetadata
 	if parsed, err := protocol.ParseOrchestrationInputs(baseInputs); err == nil {
@@ -1190,7 +1184,8 @@ func promptPlanApproval(reader *bufio.Reader, w io.Writer, tty bool, instruction
 
 func promptClarifications(reader *bufio.Reader, w io.Writer, questions []string, tty bool) ([]string, error) {
 	answers := make([]string, len(questions))
-	for i, question := range questions {
+	for i := 0; i < len(questions); i++ {
+		question := questions[i]
 		fmt.Fprintf(w, "\nClarification %d: %s\n", i+1, question)
 		if tty {
 			fmt.Fprint(w, "> ")
@@ -1727,4 +1722,22 @@ func determineWorkspaceRoot(cfg *config.Config, configPath string) string {
 		return configDir
 	}
 	return filepath.Join(configDir, cfg.WorkspaceRoot)
+}
+
+// printApprovalConfirmation prints the approval confirmation message to the output writer.
+// This helper is extracted for testability of console output snapshot tests.
+func printApprovalConfirmation(w io.Writer, approvedPlan string, approvedTasks []string, logPath string) {
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "Approved plan: %s\n", approvedPlan)
+	if len(approvedTasks) > 0 {
+		fmt.Fprintf(w, "Approved tasks: %s\n", strings.Join(approvedTasks, ", "))
+	}
+	fmt.Fprintf(w, "Intake transcript written to %s\n", logPath)
+}
+
+// printDiscoveryMessage prints the discovery status message to the output writer.
+// This helper is extracted for testability of console output snapshot tests.
+func printDiscoveryMessage(w io.Writer) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Running workspace discovery...")
 }
