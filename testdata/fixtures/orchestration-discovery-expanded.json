@@ -1,0 +1,58 @@
+{
+  "responses": {
+    "intake": {
+      "events": [
+        {
+          "type": "orchestration.proposed_tasks",
+          "payload": {
+            "plan_candidates": [
+              {"path": "PLAN.md", "confidence": 0.65}
+            ],
+            "derived_tasks": [
+              {
+                "id": "T-INITIAL",
+                "title": "Initial task with lower confidence",
+                "files": ["src/initial.go"]
+              }
+            ],
+            "notes": "More options may be available"
+          }
+        }
+      ]
+    },
+    "task_discovery": {
+      "events": [
+        {
+          "type": "orchestration.proposed_tasks",
+          "payload": {
+            "plan_candidates": [
+              {"path": "PLAN.md", "confidence": 0.70},
+              {"path": "docs/plan_v2.md", "confidence": 0.88},
+              {"path": "docs/roadmap.md", "confidence": 0.82},
+              {"path": "specs/design.md", "confidence": 0.75},
+              {"path": "README.md", "confidence": 0.50}
+            ],
+            "derived_tasks": [
+              {
+                "id": "T-EXPANDED-1",
+                "title": "Task from expanded search",
+                "files": ["src/expanded_1.go"]
+              },
+              {
+                "id": "T-EXPANDED-2",
+                "title": "Second expanded task",
+                "files": ["src/expanded_2.go"]
+              },
+              {
+                "id": "T-EXPANDED-3",
+                "title": "Third expanded task",
+                "files": ["src/expanded_3.go"]
+              }
+            ],
+            "notes": "Expanded search found 5 candidates and 3 detailed tasks"
+          }
+        }
+      ]
+    }
+  }
+}

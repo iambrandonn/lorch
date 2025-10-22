@@ -256,9 +256,17 @@ Introduce the orchestration agent, add NL intake flows, and route approved plans
   - ✅ Updated 9 test assertions to enforce new copy
   - ✅ Review fix: Added explicit assertion for example text
   - ✅ Full regression suite passing
-- **Task B**: update `docs/AGENT-SHIMS.md`, README, and new orchestration prompt template examples with shim scope, discovery behaviour, and mock mode usage.
-- **Task C**: add regression tests for denied approvals, retry flows, and non-TTY intake to guard against future regressions.
-- **Exit criteria**: documentation refreshed, UX copy stabilized, and regression suite green.
+- **Task B** ✅: update `docs/AGENT-SHIMS.md`, README, and new orchestration prompt template examples with shim scope, discovery behaviour, and mock mode usage.
+- **Task C** ✅: add regression tests for denied approvals, retry flows, and non-TTY intake to guard against future regressions.
+  - ✅ Created 3 active fixture files + 1 documentation fixture (README-regression.md)
+  - ✅ Implemented 4 test helper functions for regression validation
+  - ✅ 7 denied approval regression tests (decline during task selection, after clarifications, after discovery, abort during conflict, log preservation, multiple attempts, non-TTY)
+  - ✅ 8 retry flow regression tests (discovery+decline, multiple conflicts, clarification+conflict+approval, malformed payload, invalid input retry, partial negotiation resume, agent error handling)
+  - ✅ 6 non-TTY intake regression tests (end-to-end approval, with clarifications, with conflict resolution, with task discovery, decline, EOF handling)
+  - ✅ All 21 regression tests passing (review issues resolved)
+  - ✅ Full test suite passing (all packages)
+  - ✅ Removed 2 unused fixtures with unsupported retry patterns (converted to mock supervisor tests)
+- **Exit criteria** ✅ **MET**: documentation refreshed, UX copy stabilized, and regression suite green (21 new tests).
 
 ## Phase 3 – Interactive Configuration
 Ship `lorch config`, validation enhancements, and flexible agent/tool settings.
@@ -361,4 +369,10 @@ Improve diagnostics, recovery, and human control.
     - Custom fixture patterns (clarification, conflicts, task discovery)
     - Event validation requirements
     - Integration with agent shims
-- **Task C**: Pending (regression tests for denied approvals, retry flows, non-TTY intake)
+- **Task C** ✅: Regression tests for denied approvals, retry flows, and non-TTY intake
+  - 21 comprehensive regression tests in `internal/cli/intake_regression_test.go`
+  - 3 active fixture files + fixture usage documentation (README-regression.md)
+  - Complete coverage: denied approvals (7 tests), retry flows (8 tests), non-TTY (6 tests)
+  - 11 tests use mock supervisors for complex multi-step scenarios (clarifications, conflicts, retries)
+  - All tests passing with full project test suite green
+  - Review issues resolved: simplified non-TTY test, removed unused fixtures

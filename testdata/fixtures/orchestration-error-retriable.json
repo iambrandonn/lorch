@@ -1,0 +1,17 @@
+{
+  "responses": {
+    "intake": {
+      "events": [
+        {
+          "type": "error",
+          "payload": {
+            "code": "temporary_failure",
+            "message": "Orchestration agent encountered a temporary error",
+            "retriable": true,
+            "details": "File discovery service temporarily unavailable"
+          }
+        }
+      ]
+    }
+  }
+}

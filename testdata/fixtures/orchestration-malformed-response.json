@@ -1,0 +1,21 @@
+{
+  "responses": {
+    "intake": {
+      "events": [
+        {
+          "type": "orchestration.proposed_tasks",
+          "payload": {
+            "derived_tasks": [
+              {
+                "id": "T-MALFORMED",
+                "title": "Task without plan candidates",
+                "files": ["src/malformed.go"]
+              }
+            ],
+            "notes": "This response is intentionally missing plan_candidates field"
+          }
+        }
+      ]
+    }
+  }
+}
