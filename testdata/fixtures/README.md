@@ -326,6 +326,119 @@ CLAUDE_FIXTURE=testdata/fixtures/orchestration-simple.json \
 
 Combine with the `claude-agent` shim by setting `CLAUDE_CLI=./claude-fixture` and passing the fixture path via `CLAUDE_FIXTURE` (or `--fixture`).
 
+#### Creating Custom Orchestration Fixtures
+
+**1. Needs Clarification Flow**
+
+Test ambiguous instructions that require user clarification:
+
+```json
+{
+  "responses": {
+    "intake": {
+      "events": [{
+        "type": "orchestration.needs_clarification",
+        "payload": {
+          "questions": [
+            "Which authentication method? (OAuth, JWT, session cookies)",
+            "Should this include password reset flows?"
+          ],
+          "context": {
+            "original_instruction": "Add authentication",
+            "ambiguity_reason": "Instruction lacks specificity"
+          }
+        }
+      }]
+    }
+  }
+}
+```
+
+Lorch will prompt user for answers and re-invoke `intake` with updated inputs (same idempotency key).
+
+**2. Plan Conflict Flow**
+
+Test detection of conflicting plan files:
+
+```json
+{
+  "responses": {
+    "intake": {
+      "events": [{
+        "type": "orchestration.plan_conflict",
+        "payload": {
+          "conflicts": [
+            {
+              "paths": ["PLAN.md", "PLAN-v2.md"],
+              "reason": "Both define conflicting task T-0042"
+            }
+          ],
+          "suggested_resolution": "Use PLAN.md (most recent)"
+        }
+      }]
+    }
+  }
+}
+```
+
+Lorch surfaces conflict to user for resolution (choose plan, abort, or provide guidance).
+
+**3. Task Discovery (More Options)**
+
+Test "Ask for more options" flow with expanded candidates:
+
+```json
+{
+  "responses": {
+    "intake": {
+      "events": [{
+        "type": "orchestration.proposed_tasks",
+        "payload": {
+          "plan_candidates": [{"path": "PLAN.md", "confidence": 0.82}],
+          "derived_tasks": [{"id": "T-100", "title": "Initial task", "files": []}]
+        }
+      }]
+    },
+    "task_discovery": {
+      "events": [{
+        "type": "orchestration.proposed_tasks",
+        "payload": {
+          "plan_candidates": [
+            {"path": "PLAN.md", "confidence": 0.82},
+            {"path": "docs/design.md", "confidence": 0.65}
+          ],
+          "derived_tasks": [
+            {"id": "T-100", "title": "Initial task", "files": []},
+            {"id": "T-101", "title": "Additional task", "files": []}
+          ],
+          "notes": "Expanded search with broader criteria"
+        }
+      }]
+    }
+  }
+}
+```
+
+User selects "m" in approval menu → lorch invokes `task_discovery` → fixture returns expanded set.
+
+#### Orchestration Event Requirements
+
+Fixtures must match expected schemas:
+
+**`orchestration.proposed_tasks`**:
+- `plan_candidates`: Array with ≥1 entry, each has `path` (string) and `confidence` (0.0-1.0)
+- `derived_tasks`: Array (may be empty), each has `id` (string) and `title` (string)
+- `files` field in tasks is optional but recommended
+
+**`orchestration.needs_clarification`**:
+- `questions`: Non-empty string array
+- `context`: Object (may be empty)
+
+**`orchestration.plan_conflict`**:
+- `conflicts`: Array with ≥1 entry, each has `paths` (array) and `reason` (string)
+
+See `docs/ORCHESTRATION.md` for complete protocol documentation.
+
 ---
 
 ## Integration with Tests

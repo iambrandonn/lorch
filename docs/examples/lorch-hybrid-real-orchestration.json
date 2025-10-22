@@ -1,0 +1,79 @@
+{
+  "_comment": "Hybrid configuration: Real LLM for orchestration, fixtures for execution",
+  "_note": "Useful for developing/testing NL intake without waiting for full task execution",
+  "_usage": "lorch run --config docs/examples/lorch-hybrid-real-orchestration.json",
+
+  "version": "1.0",
+  "workspace_root": ".",
+
+  "policy": {
+    "concurrency": 1,
+    "message_max_bytes": 262144,
+    "artifact_max_bytes": 1073741824,
+    "retry": {
+      "max_attempts": 3,
+      "backoff": {
+        "initial_ms": 1000,
+        "max_ms": 60000,
+        "multiplier": 2.0,
+        "jitter": "full"
+      }
+    },
+    "strict_version_pinning": true,
+    "parallel_reviews": false,
+    "redact_secrets_in_logs": true
+  },
+
+  "agents": {
+    "builder": {
+      "cmd": ["./mockagent", "-type", "builder", "-script", "testdata/fixtures/simple-success.json", "-no-heartbeat"],
+      "heartbeat_interval_s": 10,
+      "timeouts_s": {
+        "implement": 600,
+        "implement_changes": 600
+      },
+      "env": {
+        "AGENT_ROLE": "builder"
+      }
+    },
+
+    "reviewer": {
+      "cmd": ["./mockagent", "-type", "reviewer", "-script", "testdata/fixtures/simple-success.json", "-no-heartbeat"],
+      "heartbeat_interval_s": 10,
+      "timeouts_s": {
+        "review": 300
+      },
+      "env": {
+        "AGENT_ROLE": "reviewer"
+      }
+    },
+
+    "spec_maintainer": {
+      "cmd": ["./mockagent", "-type", "spec_maintainer", "-script", "testdata/fixtures/simple-success.json", "-no-heartbeat"],
+      "heartbeat_interval_s": 10,
+      "timeouts_s": {
+        "update_spec": 180
+      },
+      "env": {
+        "AGENT_ROLE": "spec_maintainer"
+      }
+    },
+
+    "orchestration": {
+      "_comment": "Real Claude via claude-agent shim for orchestration",
+      "enabled": true,
+      "cmd": ["./claude-agent", "--role", "orchestration", "--workspace", ".", "--"],
+      "heartbeat_interval_s": 10,
+      "timeouts_s": {
+        "intake": 180,
+        "task_discovery": 180
+      },
+      "env": {
+        "CLAUDE_ROLE": "orchestration",
+        "CLAUDE_WORKSPACE": "."
+      }
+    }
+  },
+
+  "tasks": []
+}

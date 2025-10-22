@@ -335,14 +335,30 @@ Improve diagnostics, recovery, and human control.
 - Snapshot restoration: Gracefully handles missing snapshots by recreating from discovery
 - Full test coverage: Unit tests for activation, scheduler integration, and edge cases
 
-**Phase 2.5 (Task A Complete)**: UX Polish & Documentation ✅
-- Unit tests: 37 new tests (118 sub-tests) validating console output, transcript formatting, and edge cases
-- Review fixes applied: Extracted helper functions (`printApprovalConfirmation`, `printDiscoveryMessage`) for testability
-- Clarification retry bug fixed: Changed loop from range to indexed to support `i--` retry logic
-- Task A delivered: 5 UX copy improvements with example text, shorter prompts, and clearer phrasing
-  - Initial prompt now shows examples per MASTER-SPEC §4.1
-  - Plan/task selection prompts shortened with format examples
-  - Conflict messages more natural and direct
-  - Discovery message more specific
+**Phase 2.5 Complete**: UX Polish & Documentation ✅
+- **Task A** ✅: UX copy refinement
+  - 37 new tests (118 sub-tests) validating console output, transcript formatting, and edge cases
+  - Review fixes: Extracted helper functions for testability, fixed clarification retry bug
+  - 5 UX improvements: example text in prompts, shorter selections, clearer conflict messages
   - All tests updated and passing (9 assertion changes)
-- **Pending**: Task B (documentation updates)
+- **Task B** ✅: Documentation updates
+  - Updated README.md with Natural Language Intake section (workflow, examples, links)
+  - Expanded docs/AGENT-SHIMS.md significantly:
+    - New "Orchestration Agent" section (actions, events, file discovery integration)
+    - New "File Discovery Behavior" section (algorithm, determinism guarantees)
+    - Enhanced "Mock Agent" section with orchestration fixture examples
+    - New "Testing Without LLMs" section (approaches, fixture development workflow)
+  - Created docs/ORCHESTRATION.md (22KB technical reference for orchestration implementers)
+    - Protocol contract, event schemas, file discovery integration
+    - Implementation guide with checklists and LLM integration patterns
+    - 3 detailed prompt template examples
+    - Testing strategies, best practices, troubleshooting
+  - Created docs/examples/ with 3 sample configurations + README:
+    - lorch-with-real-claude.json (production usage)
+    - lorch-with-fixtures.json (deterministic testing)
+    - lorch-hybrid-real-orchestration.json (hybrid mode for NL intake development)
+  - Enhanced testdata/fixtures/README.md orchestration section:
+    - Custom fixture patterns (clarification, conflicts, task discovery)
+    - Event validation requirements
+    - Integration with agent shims
+- **Task C**: Pending (regression tests for denied approvals, retry flows, non-TTY intake)

@@ -18,6 +18,52 @@ The goal is to give you a trustworthy automation layer for spec-driven projects�
 
 If you are running in a restricted environment, set `GOCACHE=$(pwd)/.gocache` (and optionally `GOMODCACHE=$(pwd)/.gomodcache`) before invoking Go commands to keep build artefacts inside the workspace.
 
+## Natural Language Intake
+
+Instead of specifying a task ID up front, you can ask `lorch` to discover tasks from your project using natural language:
+
+```bash
+$ lorch run
+lorch> What should I do? (e.g., "Manage PLAN.md" or "Implement section 3.1")
+Implement the authentication feature from PLAN.md
+
+Discovering plan files in workspace...
+
+Plan candidates:
+  1. PLAN.md (score 0.75)
+     filename contains 'plan'
+  2. docs/plan_v2.md (score 0.71)
+     filename contains 'plan', located under 'docs'
+Select a plan [1-2], 'm' for more, or '0' to cancel: 1
+
+Derived tasks:
+  1. Implement user authentication (T-100)
+       files: src/auth.go, tests/auth_test.go
+  2. Add session management (T-101)
+       files: src/session.go, tests/session_test.go
+  3. Create login endpoint (T-102)
+       files: src/handlers.go, tests/handlers_test.go
+Select tasks [1,2,3 or blank for all, '0' to cancel]:
+
+[orchestration → builder] command implement (T-100)
+[builder] artifact.produced src/auth.go
+[builder] builder.completed success
+...
+```
+
+**How it works:**
+1. **Prompt**: `lorch` asks for your instruction (or reads from stdin in non-TTY mode)
+2. **Discovery**: Searches workspace for plan/spec files using deterministic heuristics (filename, location, content)
+3. **Orchestration**: The orchestration agent analyzes your instruction and discovered files, proposing concrete tasks
+4. **Approval**: You select which plan and which tasks to execute
+5. **Execution**: Tasks flow through the standard implement → review → spec-maintenance loop
+
+**Clarifications & Conflicts**: If your instruction is ambiguous or multiple conflicting plans exist, `lorch` will ask follow-up questions before proceeding. All decisions are recorded in `/events` and `/state` for resumability.
+
+**Testing without LLM**: Use fixture mode for deterministic testing (see `docs/AGENT-SHIMS.md` and `testdata/fixtures/orchestration-simple.json`).
+
+For implementation details, see `docs/ORCHESTRATION.md` and `docs/AGENT-SHIMS.md`.
+
 ## Release Builds
 - Build everything: `go run ./cmd/lorch release`.
 - Artifacts land in `dist/<os>-<arch>/lorch` and are summarized in `dist/manifest.json` (Go/toolchain metadata, checksums, smoke status).

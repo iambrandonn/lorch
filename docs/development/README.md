@@ -125,7 +125,7 @@ When in doubt, consolidate multiple documents into a single phase summary rather
   - Deterministic file discovery service
 - **[Phase 2.2: CLI Intake Loop](./phase-2.2.md)** ✅
 - **[Phase 2.3: Plan Negotiation & Approvals](./phase-2.3.md)** ✅ (Summary; see [final review](./phase-2.3-review-final.md))
-- **[Phase 2.5: UX Polish & Documentation](./phase-2.5.md)** ✅ (Task A complete, Task B pending)
+- **[Phase 2.5: UX Polish & Documentation](./phase-2.5.md)** ✅ (Tasks A & B complete, Task C pending)
   - **Unit Tests**: 37 new tests (118 sub-tests) validating console output
     - Transcript formatter tests (10 tests - event/heartbeat/command formatting)
     - Console output snapshot tests (12 tests - user-facing prompts and menus)
@@ -138,7 +138,14 @@ When in doubt, consolidate multiple documents into a single phase summary rather
     - Made discovery message more specific
     - Updated 9 test assertions to enforce new copy
     - Review fix: Added explicit assertion for example text
-  - **Task B**: Documentation updates (pending)
+  - **[Task B: Documentation Updates](./phase-2.5-task-b.md)** ✅
+    - Updated README.md with Natural Language Intake section
+    - Expanded docs/AGENT-SHIMS.md (+400 lines): orchestration agent, file discovery, testing without LLMs
+    - Created docs/ORCHESTRATION.md (22KB technical reference for orchestration implementers)
+    - Created docs/examples/ with 3 sample configs + README
+    - Enhanced testdata/fixtures/README.md orchestration section (+100 lines)
+    - Total: 1,450+ lines of documentation added/enhanced
+  - **Task C**: Regression tests for denied approvals, retry flows, non-TTY intake (pending)
 - **[Phase 2.4: Task Activation Pipeline](./phase-2.4.md)** ✅
   - Task A: Activation mapping (intake approvals → concrete tasks)
   - Task B: Scheduler integration (task execution with metadata preservation)
@@ -153,4 +160,4 @@ When in doubt, consolidate multiple documents into a single phase summary rather
 
 ---
 
-**Last Updated**: 2025-10-22 (Phase 2.5 Task A complete)
+**Last Updated**: 2025-10-22 (Phase 2.5 Task B complete)
