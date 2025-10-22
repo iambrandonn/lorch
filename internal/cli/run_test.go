@@ -103,7 +103,7 @@ func TestPromptPlanSelectionNonTTY(t *testing.T) {
 	index, err := promptPlanSelection(reader, &out, false, candidates, "")
 	require.NoError(t, err)
 	require.Equal(t, 1, index)
-	require.Contains(t, out.String(), "Select plan candidate")
+	require.Contains(t, out.String(), "Select a plan")
 }
 
 func TestPromptTaskSelectionNonTTY(t *testing.T) {
@@ -117,7 +117,7 @@ func TestPromptTaskSelectionNonTTY(t *testing.T) {
 	selected, err := promptTaskSelection(reader, &out, false, tasks)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"TASK-1", "TASK-2"}, selected)
-	require.Contains(t, out.String(), "Select tasks to approve")
+	require.Contains(t, out.String(), "Select tasks")
 }
 
 func TestRunIntakeFlowSuccess(t *testing.T) {
@@ -158,7 +158,7 @@ func TestRunIntakeFlowSuccess(t *testing.T) {
 	require.Equal(t, "PLAN.md", outcome.Decision.ApprovedPlan)
 
 	data := output.String()
-	require.Contains(t, data, "Running workspace discovery")
+	require.Contains(t, data, "Discovering plan files in workspace")
 	require.Contains(t, data, "Plan candidates:")
 	require.Contains(t, data, "Approved plan: PLAN.md")
 	require.Contains(t, data, "Intake transcript written")

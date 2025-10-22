@@ -1,8 +1,8 @@
-# Phase 2.5 Implementation Summary – UX Polish & Documentation (Unit Tests)
+# Phase 2.5 Implementation Summary – UX Polish & Documentation
 
-**Milestone**: Phase 2.5 (Unit Tests Component)
+**Milestone**: Phase 2.5
 **Completed**: 2025-10-22
-**Status**: ✅ Unit Tests Delivered
+**Status**: ✅ Tasks A (UX Copy) Complete, B (Documentation) Pending
 
 ---
 
@@ -433,14 +433,62 @@ internal/cli/
 
 ---
 
+---
+
+## Task A: UX Copy Refinement ✅
+
+**Completed**: 2025-10-22
+**Status**: ✅ Delivered
+**Detailed Documentation**: [phase-2.5-task-a.md](./phase-2.5-task-a.md)
+
+### Summary
+
+Refined all user-facing console prompts to be clearer, more helpful, and aligned with MASTER-SPEC §4.1. All changes validated by the 37 snapshot tests from unit tests phase.
+
+### Copy Changes
+
+1. **Initial Instruction Prompt** - Added example text per MASTER-SPEC §4.1
+   - Before: `"lorch> What should I do? "`
+   - After: `"lorch> What should I do? (e.g., \"Manage PLAN.md\" or \"Implement section 3.1\") "`
+
+2. **Plan Selection** - Shorter, consistent quoting
+   - Before: `"Select plan candidate [1-%d], 'm' for more options, or 0 to cancel"`
+   - After: `"Select a plan [1-%d], 'm' for more, or '0' to cancel"`
+
+3. **Task Selection** - Added format example
+   - Before: `"Select tasks to approve (comma separated numbers, blank for all, 0 to cancel)"`
+   - After: `"Select tasks [1,2,3 or blank for all, '0' to cancel]"`
+
+4. **Conflict Resolution** - More natural phrasing
+   - Before: `"Plan conflict reported by orchestration:" / "Provide guidance (text)..."`
+   - After: `"The orchestration agent detected a plan conflict:" / "How should this be resolved?"`
+
+5. **Discovery Message** - More specific
+   - Before: `"Running workspace discovery..."`
+   - After: `"Discovering plan files in workspace..."`
+
+### Test Updates
+
+- Updated 9 test assertions across 2 files to match new copy
+- Added explicit assertion for example text (review fix)
+- All 37 unit tests + full regression suite passing
+
+### Files Modified
+
+- `internal/cli/run.go` - 5 UX improvements
+- `internal/cli/console_output_test.go` - 7 assertion updates
+- `internal/cli/run_test.go` - 3 assertion updates
+
+---
+
 ## Next Steps
 
 ### Immediate (Phase 2.5 Completion)
 
 1. ✅ All unit tests passing
-2. ⏭️ Task A: Refine copy for prompts (using tests as validation)
-3. ⏭️ Task B: Update documentation (refer to tests for UX spec)
-4. ⏭️ Full regression run with updated copy
+2. ✅ Task A: Refine copy for prompts (completed)
+3. ⏭️ Task B: Update documentation (refer to new prompts in examples)
+4. ⏭️ Task C: Additional regression tests (if needed)
 
 ### Phase 3 Planning
 
@@ -451,6 +499,9 @@ internal/cli/
 
 ---
 
-**Phase 2.5 Unit Tests Status**: ✅ Complete (including review fixes)
-**Review Status**: ✅ All findings addressed, tests now exercise production code
-**Next Phase**: Phase 2.5 Task A - UX Copy Refinement (use tests for validation)
+**Phase 2.5 Status**:
+- ✅ Unit Tests Complete (including review fixes)
+- ✅ Task A Complete (UX Copy Refinement)
+- ⏭️ Task B Pending (Documentation Updates)
+
+**Next Task**: Phase 2.5 Task B - Update README, docs/AGENT-SHIMS.md, and any tutorials with new prompt examples

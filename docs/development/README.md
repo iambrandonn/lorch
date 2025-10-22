@@ -125,13 +125,20 @@ When in doubt, consolidate multiple documents into a single phase summary rather
   - Deterministic file discovery service
 - **[Phase 2.2: CLI Intake Loop](./phase-2.2.md)** ✅
 - **[Phase 2.3: Plan Negotiation & Approvals](./phase-2.3.md)** ✅ (Summary; see [final review](./phase-2.3-review-final.md))
-- **[Phase 2.5: UX Polish & Documentation (Unit Tests)](./phase-2.5.md)** ✅
-  - Transcript formatter tests (10 tests - event/heartbeat/command formatting)
-  - Console output snapshot tests (12 tests - user-facing prompts and menus)
-  - Prompting edge cases tests (15 tests - input validation and retries)
-  - Total: 37 new tests, 118 sub-tests, all passing
-  - Review fixes: Extracted helper functions, fixed clarification retry bug, added retry tests
-  - Note: Tasks A (copy refinement) and B (documentation) pending
+- **[Phase 2.5: UX Polish & Documentation](./phase-2.5.md)** ✅ (Task A complete, Task B pending)
+  - **Unit Tests**: 37 new tests (118 sub-tests) validating console output
+    - Transcript formatter tests (10 tests - event/heartbeat/command formatting)
+    - Console output snapshot tests (12 tests - user-facing prompts and menus)
+    - Prompting edge cases tests (15 tests - input validation and retries)
+    - Review fixes: Extracted helper functions, fixed clarification retry bug, added retry tests
+  - **[Task A: UX Copy Refinement](./phase-2.5-task-a.md)** ✅
+    - Added example text to initial instruction prompt (MASTER-SPEC §4.1)
+    - Shortened plan/task selection prompts with format examples
+    - Improved conflict resolution messaging (more natural phrasing)
+    - Made discovery message more specific
+    - Updated 9 test assertions to enforce new copy
+    - Review fix: Added explicit assertion for example text
+  - **Task B**: Documentation updates (pending)
 - **[Phase 2.4: Task Activation Pipeline](./phase-2.4.md)** ✅
   - Task A: Activation mapping (intake approvals → concrete tasks)
   - Task B: Scheduler integration (task execution with metadata preservation)
@@ -146,4 +153,4 @@ When in doubt, consolidate multiple documents into a single phase summary rather
 
 ---
 
-**Last Updated**: 2025-10-22
+**Last Updated**: 2025-10-22 (Phase 2.5 Task A complete)

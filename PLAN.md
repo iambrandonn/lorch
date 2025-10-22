@@ -247,8 +247,15 @@ Introduce the orchestration agent, add NL intake flows, and route approved plans
 - **Exit criteria** ✅ **MET**: TR-001 integration test validates instruction → approval → implement/review/spec-maintainer completion with recorded traceability fields in all receipts.
 
 ### P2.5 Milestone – UX Polish & Documentation
-- **Tests first**: snapshot tests for console messaging, including conflict summaries, approval confirmations, and multi-candidate menus.
-- **Task A**: refine copy for prompts, conflict surfacing, approval menus, and success summaries based on spec guidelines.
+- **Tests first** ✅: snapshot tests for console messaging, including conflict summaries, approval confirmations, and multi-candidate menus.
+- **Task A** ✅: refine copy for prompts, conflict surfacing, approval menus, and success summaries based on spec guidelines.
+  - ✅ Added example text to initial instruction prompt (MASTER-SPEC §4.1)
+  - ✅ Shortened plan/task selection prompts with format examples
+  - ✅ Improved conflict resolution messaging (more natural phrasing)
+  - ✅ Made discovery message more specific
+  - ✅ Updated 9 test assertions to enforce new copy
+  - ✅ Review fix: Added explicit assertion for example text
+  - ✅ Full regression suite passing
 - **Task B**: update `docs/AGENT-SHIMS.md`, README, and new orchestration prompt template examples with shim scope, discovery behaviour, and mock mode usage.
 - **Task C**: add regression tests for denied approvals, retry flows, and non-TTY intake to guard against future regressions.
 - **Exit criteria**: documentation refreshed, UX copy stabilized, and regression suite green.
@@ -328,10 +335,14 @@ Improve diagnostics, recovery, and human control.
 - Snapshot restoration: Gracefully handles missing snapshots by recreating from discovery
 - Full test coverage: Unit tests for activation, scheduler integration, and edge cases
 
-**Phase 2.5 (Unit Tests Complete)**: UX Polish & Documentation – Test Implementation ✅
-- Snapshot tests: 37 new tests (118 sub-tests) validating console output, transcript formatting, and edge cases
+**Phase 2.5 (Task A Complete)**: UX Polish & Documentation ✅
+- Unit tests: 37 new tests (118 sub-tests) validating console output, transcript formatting, and edge cases
 - Review fixes applied: Extracted helper functions (`printApprovalConfirmation`, `printDiscoveryMessage`) for testability
 - Clarification retry bug fixed: Changed loop from range to indexed to support `i--` retry logic
-- Added retry tests: Comprehensive validation of empty answer retry behavior
-- All tests passing: Full regression suite green
-- **Pending**: Task A (UX copy refinement) and Task B (documentation updates)
+- Task A delivered: 5 UX copy improvements with example text, shorter prompts, and clearer phrasing
+  - Initial prompt now shows examples per MASTER-SPEC §4.1
+  - Plan/task selection prompts shortened with format examples
+  - Conflict messages more natural and direct
+  - Discovery message more specific
+  - All tests updated and passing (9 assertion changes)
+- **Pending**: Task B (documentation updates)

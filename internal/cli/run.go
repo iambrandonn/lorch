@@ -1225,7 +1225,7 @@ func promptPlanSelection(reader *bufio.Reader, w io.Writer, tty bool, candidates
 	}
 
 	for {
-		fmt.Fprintf(w, "Select plan candidate [1-%d], 'm' for more options, or 0 to cancel: ", len(candidates))
+		fmt.Fprintf(w, "Select a plan [1-%d], 'm' for more, or '0' to cancel: ", len(candidates))
 		if !tty {
 			fmt.Fprintln(w)
 		}
@@ -1269,7 +1269,7 @@ func promptTaskSelection(reader *bufio.Reader, w io.Writer, tty bool, tasks []de
 	}
 
 	for {
-		fmt.Fprint(w, "Select tasks to approve (comma separated numbers, blank for all, 0 to cancel): ")
+		fmt.Fprint(w, "Select tasks [1,2,3 or blank for all, '0' to cancel]: ")
 		if !tty {
 			fmt.Fprintln(w)
 		}
@@ -1347,11 +1347,11 @@ func collectAllTaskIDs(tasks []derivedTask) []string {
 
 func promptPlanConflictResolution(reader *bufio.Reader, w io.Writer, payload map[string]any, tty bool) (resolution string, requestMore bool, err error) {
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Plan conflict reported by orchestration:")
+	fmt.Fprintln(w, "The orchestration agent detected a plan conflict:")
 	fmt.Fprintln(w, formatConflictPayload(payload))
 
 	for {
-		fmt.Fprint(w, "Provide guidance (text), 'm' for more options, or type 'abort' to cancel: ")
+		fmt.Fprint(w, "How should this be resolved? ('m' for more options, 'abort' to cancel): ")
 		if !tty {
 			fmt.Fprintln(w)
 		}
@@ -1466,7 +1466,7 @@ func saveIntakeOutcome(workspaceRoot string, outcome *IntakeOutcome) error {
 
 func promptForInstruction(reader *bufio.Reader, w io.Writer, tty bool) (string, error) {
 	if tty {
-		fmt.Fprint(w, "lorch> What should I do? ")
+		fmt.Fprint(w, "lorch> What should I do? (e.g., \"Manage PLAN.md\" or \"Implement section 3.1\") ")
 	}
 
 	line, err := reader.ReadString('\n')
@@ -1739,5 +1739,5 @@ func printApprovalConfirmation(w io.Writer, approvedPlan string, approvedTasks [
 // This helper is extracted for testability of console output snapshot tests.
 func printDiscoveryMessage(w io.Writer) {
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Running workspace discovery...")
+	fmt.Fprintln(w, "Discovering plan files in workspace...")
 }

@@ -19,8 +19,9 @@ func TestConsoleOutput_IntakePrompt_TTY(t *testing.T) {
 
 	result := output.String()
 
-	// Verify TTY prompt appears
+	// Verify TTY prompt appears with example text
 	require.Contains(t, result, "lorch> What should I do?")
+	require.Contains(t, result, "(e.g., \"Manage PLAN.md\" or \"Implement section 3.1\")")
 	require.NotContains(t, result, "\n\n") // Should not have extra newlines in prompt
 }
 
@@ -34,9 +35,10 @@ func TestConsoleOutput_IntakePrompt_NonTTY(t *testing.T) {
 
 	result := output.String()
 
-	// Verify no prompt in non-TTY mode
+	// Verify no prompt in non-TTY mode (including no example text)
 	require.NotContains(t, result, "lorch>")
 	require.NotContains(t, result, "What should I do?")
+	require.NotContains(t, result, "(e.g., \"Manage PLAN.md\" or \"Implement section 3.1\")")
 }
 
 // TestConsoleOutput_PlanCandidateMenu validates multi-candidate menu display
@@ -120,17 +122,17 @@ func TestConsoleOutput_PlanCandidateMenu(t *testing.T) {
 			}
 
 			// Verify selection prompt
-			require.Contains(t, result, "Select plan candidate")
-			require.Contains(t, result, "'m' for more options")
-			require.Contains(t, result, "or 0 to cancel")
+			require.Contains(t, result, "Select a plan")
+			require.Contains(t, result, "'m' for more")
+			require.Contains(t, result, "or '0' to cancel")
 
 			// Verify TTY formatting
 			if tt.tty {
 				// TTY mode should not print extra newlines after prompt
-				require.NotContains(t, result, "or 0 to cancel: \n")
+				require.NotContains(t, result, "or '0' to cancel: \n")
 			} else {
 				// Non-TTY mode should have newline after prompt
-				require.Contains(t, result, "or 0 to cancel: \n")
+				require.Contains(t, result, "or '0' to cancel: \n")
 			}
 		})
 	}
@@ -200,16 +202,16 @@ func TestConsoleOutput_TaskSelectionMenu(t *testing.T) {
 			}
 
 			// Verify selection prompt
-			require.Contains(t, result, "Select tasks to approve")
-			require.Contains(t, result, "comma separated numbers")
+			require.Contains(t, result, "Select tasks")
+			require.Contains(t, result, "1,2,3")
 			require.Contains(t, result, "blank for all")
-			require.Contains(t, result, "0 to cancel")
+			require.Contains(t, result, "'0' to cancel")
 
 			// Verify TTY formatting
 			if tt.tty {
-				require.NotContains(t, result, "0 to cancel): \n")
+				require.NotContains(t, result, "'0' to cancel]: \n")
 			} else {
-				require.Contains(t, result, "0 to cancel): \n")
+				require.Contains(t, result, "'0' to cancel]: \n")
 			}
 		})
 	}
@@ -384,7 +386,7 @@ func TestConsoleOutput_ConflictSummary(t *testing.T) {
 			result := output.String()
 
 			// Verify conflict header
-			require.Contains(t, result, "Plan conflict reported by orchestration:")
+			require.Contains(t, result, "The orchestration agent detected a plan conflict:")
 
 			// Verify payload is formatted (as JSON)
 			if len(tt.payload) == 0 {
@@ -398,15 +400,15 @@ func TestConsoleOutput_ConflictSummary(t *testing.T) {
 			}
 
 			// Verify resolution prompt
-			require.Contains(t, result, "Provide guidance")
+			require.Contains(t, result, "How should this be resolved?")
 			require.Contains(t, result, "'m' for more options")
-			require.Contains(t, result, "or type 'abort' to cancel")
+			require.Contains(t, result, "'abort' to cancel")
 
 			// Verify TTY formatting
 			if tt.tty {
-				require.NotContains(t, result, "to cancel: \n")
+				require.NotContains(t, result, "'abort' to cancel): \n")
 			} else {
-				require.Contains(t, result, "to cancel: \n")
+				require.Contains(t, result, "'abort' to cancel): \n")
 			}
 		})
 	}
@@ -491,8 +493,8 @@ func TestConsoleOutput_DiscoveryMessage(t *testing.T) {
 	result := output.String()
 
 	// Verify discovery message format
-	require.Contains(t, result, "Running workspace discovery")
-	require.True(t, strings.HasPrefix(strings.TrimSpace(result), "Running workspace discovery"))
+	require.Contains(t, result, "Discovering plan files in workspace")
+	require.True(t, strings.HasPrefix(strings.TrimSpace(result), "Discovering plan files in workspace"))
 }
 
 // TestConsoleOutput_ErrorMessages validates error formatting
