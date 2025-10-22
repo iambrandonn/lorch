@@ -191,19 +191,32 @@ Introduce the orchestration agent, add NL intake flows, and route approved plans
 - 🧪 Test coverage: 13 new tests across all packages (all passing)
 - 📊 Review documents: P2.1-TASK-A through P2.1-TASK-D final reviews
 
-### P2.2 Milestone – CLI Intake Loop
-- **Tests first**: CLI interaction tests covering instruction prompt, cancellation, transcript streaming, and non-TTY behaviour (stdin fallback / failure modes).
-- **Task A**: extend `lorch run` to detect missing `--task` and prompt for NL instruction (TTY prompt plus documented non-TTY behaviour).
-- **Task B**: wire intake transcript streaming into console/logs while honoring heartbeat liveness checks.
-- **Task C**: persist the raw intake conversation to `/events/<run>-intake.ndjson` with timing metadata.
-- **Exit criteria**: manual smoke run shows prompt → intake transcript mirrored to console and events log; non-TTY path covered by automated test.
+### P2.2 Milestone – CLI Intake Loop ✅ **COMPLETE**
+> **Status**: Completed 2025-10-21
+> **Summary**: NL instruction prompting, orchestration transcript streaming, and event persistence working end-to-end.
 
-### P2.3 Milestone – Plan Negotiation & Approvals
-- **Tests first**: orchestration loop tests covering `proposed_tasks`, `needs_clarification`, `task_discovery`, multi-candidate selections, and user decline flows.
-- **Task A**: implement message router that relays orchestration envelopes (both `intake` and `task_discovery`) and enforces required responses.
-- **Task B**: capture `system.user_decision` records (approve/deny/clarify) with correlation and persist to ledger + `/state/run.json`; ensure repeated clarifications reuse the original idempotency key with updated inputs.
-- **Task C**: surface conflicts and clarifying questions to the user with clear retry/abort options, including numbered menus for multi-candidate approval and a "none" escape hatch.
-- **Exit criteria**: approval loop records user decisions, handles clarifications with stable IKs, supports `task_discovery`, and exits cleanly on deny or "none" selection.
+- **Tests first** ✅: Unit tests for TTY/non-TTY prompting, integration test with real agent fixture
+- **Task A** ✅: `lorch run` detects missing --task and prompts "lorch> What should I do?" (TTY) or reads stdin (non-TTY)
+- **Task B** ✅: Orchestration transcripts (commands, events, heartbeats) stream to console with formatted output
+- **Task C** ✅: Raw intake conversation persisted to `/events/<run>-intake.ndjson` with RFC3339 timestamps
+- **Exit criteria** ✅: Smoke test confirms console mirroring and event log creation; automated non-TTY test passing
+
+### P2.3 Milestone – Plan Negotiation & Approvals ✅ **COMPLETE**
+> **Status**: Completed 2025-10-21
+> **Summary**: Full approval loop with clarification/conflict resolution, heartbeat monitoring, intake resumability, and comprehensive test coverage. All exit criteria met.
+
+- **Tests first** ✅: 17 tests covering all flows (proposed_tasks, needs_clarification, task_discovery, plan_conflict, multi-candidate selections, user decline, non-TTY, resumability)
+- **Task A** ✅: Message router relays intake & task_discovery envelopes with proper correlation tracking
+- **Task B** ✅: system.user_decision records persisted to ledger + state; clarifications reuse original idempotency key (verified by test)
+- **Task C** ✅: Conflicts/clarifications surfaced with numbered menus, "m" for more options, "0" to cancel/abort
+- **Exit criteria** ✅: All requirements met - approvals recorded, stable IKs, task_discovery working, clean exits
+
+**Bonus deliverables**:
+- Heartbeat timeout monitoring (3× interval, MASTER-SPEC §7.1)
+- Intake resumability with pending command reconstruction (MASTER-SPEC §5.6)
+- Magic strings extracted to constants (maintainability)
+- Dead code removed (printIntakeSummary)
+- Non-TTY test coverage added
 
 ### P2.4 Milestone – Task Activation Pipeline
 - **Tests first**: integration test driving orchestration output into builder/reviewer/spec-maintainer mocks, plus regression for `task_discovery` follow-up tasks.
@@ -271,4 +284,20 @@ Improve diagnostics, recovery, and human control.
 - Deterministic file discovery service (`internal/discovery`) with stable candidate ranking.
 - All foundation pieces tested and integration-verified end-to-end.
 
-**Ready for Phase 2.2**: CLI Intake Loop (detect missing --task, prompt for NL instruction, stream orchestration transcripts).
+**Phase 2.2 Complete**: CLI Intake Loop delivered. The system now:
+- Detects missing --task flag and prompts for natural language instruction.
+- Streams orchestration agent transcripts (commands, events, heartbeats) to console and `/events/<run>-intake.ndjson`.
+- Supports both TTY (interactive prompts) and non-TTY (stdin) modes.
+- Persists intake conversations with timing metadata for replay and debugging.
+
+**Phase 2.3 Complete**: Plan Negotiation & Approvals delivered. The system now:
+- Implements complete approval loop with numbered plan/task selection menus.
+- Handles clarification rounds with stable idempotency key reuse across retries.
+- Supports task_discovery flow ("more options") for expanded candidate sets.
+- Resolves plan_conflict events with user guidance or abort options.
+- Records system.user_decision events to ledger and state for full traceability.
+- Enforces heartbeat timeouts (3× interval) per MASTER-SPEC §7.1.
+- Supports intake resumability with pending command reconstruction.
+- Extracts magic strings to constants for maintainability.
+
+**Ready for Phase 2.4**: Task Activation Pipeline (map approved tasks → enqueue into scheduler with intake traceability).

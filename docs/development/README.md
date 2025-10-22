@@ -125,7 +125,7 @@ When in doubt, consolidate multiple documents into a single phase summary rather
   - Deterministic file discovery service
 
 - **[Phase 2.2: CLI Intake Loop](./phase-2.2.md)** ✅
-- **Phase 2.3: Plan Negotiation & Approvals** (planned)
+- **[Phase 2.3: Plan Negotiation & Approvals](./phase-2.3.md)** ✅ (Summary; see [final review](./phase-2.3-review-final.md))
 - **Phase 2.4: Task Activation Pipeline** (planned)
 - **Phase 2.5: UX Polish & Documentation** (planned)
 

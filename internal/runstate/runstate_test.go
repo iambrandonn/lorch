@@ -45,17 +45,27 @@ func TestSaveAndLoadRunState(t *testing.T) {
 
 	// Create test state
 	original := &RunState{
-		RunID:          "run-001",
-		Status:         StatusRunning,
-		TaskID:         "T-0042",
-		CorrelationID:  "corr-001",
-		SnapshotID:     "snap-abc123",
-		CurrentStage:   StageReview,
-		StartedAt:      time.Now().UTC(),
-		LastCommandID:  "cmd-5",
-		LastEventID:    "evt-42",
+		RunID:         "run-001",
+		Status:        StatusRunning,
+		TaskID:        "T-0042",
+		CorrelationID: "corr-001",
+		SnapshotID:    "snap-abc123",
+		CurrentStage:  StageReview,
+		StartedAt:     time.Now().UTC(),
+		LastCommandID: "cmd-5",
+		LastEventID:   "evt-42",
 		TerminalEvents: map[string]string{
 			"builder": "evt-10",
+		},
+		Intake: &IntakeState{
+			Instruction:           "Manage PLAN.md",
+			BaseInputs:            map[string]any{"user_instruction": "Manage PLAN.md"},
+			LastClarifications:    []string{"Focus on tests"},
+			ConflictResolutions:   []string{"Prefer docs/plan_v2.md"},
+			PendingAction:         "intake",
+			PendingInputs:         map[string]any{"user_instruction": "Manage PLAN.md"},
+			PendingIdempotencyKey: "ik-test",
+			PendingCorrelationID:  "corr-test",
 		},
 	}
 
@@ -90,6 +100,56 @@ func TestSaveAndLoadRunState(t *testing.T) {
 
 	if len(loaded.TerminalEvents) != len(original.TerminalEvents) {
 		t.Errorf("TerminalEvents count = %d, want %d", len(loaded.TerminalEvents), len(original.TerminalEvents))
+	}
+
+	if loaded.Intake == nil {
+		t.Fatalf("Intake state missing after load")
+	}
+
+	if loaded.Intake.PendingIdempotencyKey != "ik-test" {
+		t.Errorf("PendingIdempotencyKey = %s, want ik-test", loaded.Intake.PendingIdempotencyKey)
+	}
+}
+
+func TestIntakeStateHelpers(t *testing.T) {
+	baseInputs := map[string]any{"user_instruction": "Manage PLAN.md"}
+	state := NewIntakeState("run-123", "snap-abc", "Manage PLAN.md", baseInputs)
+
+	clarifications := []string{"Focus on section 2"}
+	state.SetIntakeClarifications(clarifications)
+	clarifications[0] = "mutated"
+
+	resolutions := []string{"Use docs/plan_v2.md"}
+	state.SetIntakeConflictResolutions(resolutions)
+	resolutions[0] = "changed"
+
+	inputs := map[string]any{"user_instruction": "Manage PLAN.md"}
+	state.RecordIntakeCommand("intake", inputs, "ik-123", "corr-123")
+	inputs["user_instruction"] = "mutated"
+
+	if got := state.Intake.PendingAction; got != "intake" {
+		t.Fatalf("PendingAction = %s, want intake", got)
+	}
+	if state.Intake.PendingIdempotencyKey != "ik-123" {
+		t.Errorf("PendingIdempotencyKey = %s, want ik-123", state.Intake.PendingIdempotencyKey)
+	}
+	if state.Intake.PendingInputs["user_instruction"].(string) != "Manage PLAN.md" {
+		t.Errorf("PendingInputs mutated unexpectedly")
+	}
+	if state.Intake.LastClarifications[0] != "Focus on section 2" {
+		t.Errorf("LastClarifications not stored correctly")
+	}
+	if state.Intake.ConflictResolutions[0] != "Use docs/plan_v2.md" {
+		t.Errorf("ConflictResolutions not stored correctly")
+	}
+
+	decision := &IntakeDecision{Status: "approved", ApprovedPlan: "PLAN.md", OccurredAt: time.Now().UTC()}
+	state.RecordIntakeDecision(decision)
+	if state.Intake.PendingAction != "" {
+		t.Errorf("PendingAction not cleared after decision")
+	}
+	if state.Intake.LastDecision == nil || state.Intake.LastDecision.Status != "approved" {
+		t.Errorf("LastDecision not recorded")
 	}
 }
 

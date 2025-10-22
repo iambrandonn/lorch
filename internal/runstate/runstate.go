@@ -24,10 +24,11 @@ const (
 type Stage string
 
 const (
-	StageImplement     Stage = "implement"
-	StageReview        Stage = "review"
-	StageSpecMaintain  Stage = "spec_maintain"
-	StageComplete      Stage = "complete"
+	StageIntake       Stage = "intake"
+	StageImplement    Stage = "implement"
+	StageReview       Stage = "review"
+	StageSpecMaintain Stage = "spec_maintain"
+	StageComplete     Stage = "complete"
 )
 
 // RunState represents the persisted state of a run
@@ -44,6 +45,7 @@ type RunState struct {
 	LastCommandID  string            `json:"last_command_id,omitempty"`
 	LastEventID    string            `json:"last_event_id,omitempty"`
 	TerminalEvents map[string]string `json:"terminal_events,omitempty"`
+	Intake         *IntakeState      `json:"intake,omitempty"`
 }
 
 // NewRunState creates a new run state
@@ -57,6 +59,49 @@ func NewRunState(runID, taskID, snapshotID string) *RunState {
 		StartedAt:      time.Now().UTC(),
 		TerminalEvents: make(map[string]string),
 	}
+}
+
+// NewIntakeState creates a run state for an intake session.
+func NewIntakeState(runID, snapshotID, instruction string, baseInputs map[string]any) *RunState {
+	return &RunState{
+		RunID:          runID,
+		Status:         StatusRunning,
+		TaskID:         "",
+		SnapshotID:     snapshotID,
+		CurrentStage:   StageIntake,
+		StartedAt:      time.Now().UTC(),
+		TerminalEvents: make(map[string]string),
+		Intake: &IntakeState{
+			Instruction:         instruction,
+			BaseInputs:          cloneGenericMap(baseInputs),
+			LastClarifications:  []string{},
+			ConflictResolutions: []string{},
+		},
+	}
+}
+
+// IntakeState captures the state of the intake negotiation flow.
+type IntakeState struct {
+	Instruction           string          `json:"instruction"`
+	BaseInputs            map[string]any  `json:"base_inputs,omitempty"`
+	LastClarifications    []string        `json:"last_clarifications,omitempty"`
+	ConflictResolutions   []string        `json:"conflict_resolutions,omitempty"`
+	LastDecision          *IntakeDecision `json:"last_decision,omitempty"`
+	PendingAction         string          `json:"pending_action,omitempty"`
+	PendingInputs         map[string]any  `json:"pending_inputs,omitempty"`
+	PendingIdempotencyKey string          `json:"pending_idempotency_key,omitempty"`
+	PendingCorrelationID  string          `json:"pending_correlation_id,omitempty"`
+}
+
+// IntakeDecision records the most recent user decision during intake.
+type IntakeDecision struct {
+	Status        string    `json:"status"`
+	ApprovedPlan  string    `json:"approved_plan,omitempty"`
+	ApprovedTasks []string  `json:"approved_tasks,omitempty"`
+	Reason        string    `json:"reason,omitempty"`
+	Prompt        string    `json:"prompt,omitempty"`
+	OccurredAt    time.Time `json:"occurred_at"`
+	CorrelationID string    `json:"correlation_id,omitempty"`
 }
 
 // SaveRunState writes run state to disk atomically
@@ -135,4 +180,81 @@ func (s *RunState) RecordTerminalEvent(agentType, eventID string) {
 		s.TerminalEvents = make(map[string]string)
 	}
 	s.TerminalEvents[agentType] = eventID
+}
+
+// SetIntakeClarifications records the latest clarification answers.
+func (s *RunState) SetIntakeClarifications(clarifications []string) {
+	if s.Intake == nil {
+		s.Intake = &IntakeState{}
+	}
+	s.Intake.LastClarifications = append([]string(nil), clarifications...)
+}
+
+// RecordIntakeDecision stores the most recent intake decision.
+func (s *RunState) RecordIntakeDecision(decision *IntakeDecision) {
+	if s.Intake == nil {
+		s.Intake = &IntakeState{}
+	}
+	s.Intake.LastDecision = decision
+
+	// Clear pending command metadata now that a decision has been made.
+	s.Intake.PendingAction = ""
+	s.Intake.PendingInputs = nil
+	s.Intake.PendingIdempotencyKey = ""
+	s.Intake.PendingCorrelationID = ""
+}
+
+// SetIntakeConflictResolutions records conflict resolution notes supplied by the user.
+func (s *RunState) SetIntakeConflictResolutions(resolutions []string) {
+	if s.Intake == nil {
+		s.Intake = &IntakeState{}
+	}
+	s.Intake.ConflictResolutions = append([]string(nil), resolutions...)
+}
+
+// RecordIntakeBaseInputs stores the canonical base inputs map for resumability.
+func (s *RunState) RecordIntakeBaseInputs(inputs map[string]any) {
+	if s.Intake == nil {
+		s.Intake = &IntakeState{}
+	}
+	s.Intake.BaseInputs = cloneGenericMap(inputs)
+}
+
+// RecordIntakeCommand stores metadata about the most recent command dispatched to the orchestration agent.
+func (s *RunState) RecordIntakeCommand(action string, inputs map[string]any, idempotencyKey, correlationID string) {
+	if s.Intake == nil {
+		s.Intake = &IntakeState{}
+	}
+	s.Intake.PendingAction = action
+	s.Intake.PendingInputs = cloneGenericMap(inputs)
+	s.Intake.PendingIdempotencyKey = idempotencyKey
+	s.Intake.PendingCorrelationID = correlationID
+}
+
+func cloneGenericMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = cloneGenericValue(v)
+	}
+	return dst
+}
+
+func cloneGenericValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return cloneGenericMap(val)
+	case []any:
+		result := make([]any, len(val))
+		for i, item := range val {
+			result[i] = cloneGenericValue(item)
+		}
+		return result
+	case []string:
+		return append([]string(nil), val...)
+	default:
+		return val
+	}
 }

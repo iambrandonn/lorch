@@ -14,6 +14,7 @@ import (
 	"github.com/iambrandonn/lorch/internal/protocol"
 	"github.com/iambrandonn/lorch/internal/runstate"
 	"github.com/iambrandonn/lorch/internal/scheduler"
+	"github.com/iambrandonn/lorch/internal/supervisor"
 	"github.com/iambrandonn/lorch/internal/transcript"
 	"github.com/spf13/cobra"
 )
@@ -92,6 +93,16 @@ func runResume(cmd *cobra.Command, args []string) error {
 		"current_stage", state.CurrentStage,
 		"status", state.Status)
 
+	if state.CurrentStage == runstate.StageIntake {
+		logger.Info("resuming intake negotiation")
+		outcome, err := runIntakeFlow(cmd, cfg, workspaceRoot, logger)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Natural language intake completed. Transcript: %s\n", outcome.LogPath)
+		return nil
+	}
+
 	// Load event ledger
 	ledgerPath := filepath.Join(workspaceRoot, "events", runID+".ndjson")
 	lg, err := ledger.ReadLedger(ledgerPath)
@@ -139,19 +150,32 @@ func runResume(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	// Create agent supervisors
-	builder, err := createAgentSupervisor(cfg.Agents.Builder, protocol.AgentTypeBuilder, logger)
+	builderSup, err := agentSupervisorFactory(cfg.Agents.Builder, protocol.AgentTypeBuilder, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create builder supervisor: %w", err)
 	}
 
-	reviewer, err := createAgentSupervisor(cfg.Agents.Reviewer, protocol.AgentTypeReviewer, logger)
+	reviewerSup, err := agentSupervisorFactory(cfg.Agents.Reviewer, protocol.AgentTypeReviewer, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create reviewer supervisor: %w", err)
 	}
 
-	specMaintainer, err := createAgentSupervisor(cfg.Agents.SpecMaintainer, protocol.AgentTypeSpecMaintainer, logger)
+	specMaintainerSup, err := agentSupervisorFactory(cfg.Agents.SpecMaintainer, protocol.AgentTypeSpecMaintainer, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create spec maintainer supervisor: %w", err)
+	}
+
+	builder, ok := builderSup.(*supervisor.AgentSupervisor)
+	if !ok {
+		return fmt.Errorf("unexpected supervisor type for builder")
+	}
+	reviewer, ok := reviewerSup.(*supervisor.AgentSupervisor)
+	if !ok {
+		return fmt.Errorf("unexpected supervisor type for reviewer")
+	}
+	specMaintainer, ok := specMaintainerSup.(*supervisor.AgentSupervisor)
+	if !ok {
+		return fmt.Errorf("unexpected supervisor type for spec maintainer")
 	}
 
 	// Start agents

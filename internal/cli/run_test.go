@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -22,7 +23,7 @@ import (
 )
 
 func TestPromptForInstructionTTY(t *testing.T) {
-	input := strings.NewReader("Manage PLAN.md\n")
+	input := bufio.NewReader(strings.NewReader("Manage PLAN.md\n"))
 	var output bytes.Buffer
 
 	instruction, err := promptForInstruction(input, &output, true)
@@ -32,7 +33,7 @@ func TestPromptForInstructionTTY(t *testing.T) {
 }
 
 func TestPromptForInstructionNonTTY(t *testing.T) {
-	input := strings.NewReader("Implement PLAN.md\n")
+	input := bufio.NewReader(strings.NewReader("Implement PLAN.md\n"))
 	var output bytes.Buffer
 
 	instruction, err := promptForInstruction(input, &output, false)
@@ -42,7 +43,7 @@ func TestPromptForInstructionNonTTY(t *testing.T) {
 }
 
 func TestPromptForInstructionEmpty(t *testing.T) {
-	input := strings.NewReader("\n")
+	input := bufio.NewReader(strings.NewReader("\n"))
 	var output bytes.Buffer
 
 	_, err := promptForInstruction(input, &output, true)
@@ -51,7 +52,7 @@ func TestPromptForInstructionEmpty(t *testing.T) {
 }
 
 func TestPromptForInstructionEOFWithoutNewline(t *testing.T) {
-	input := strings.NewReader("Manage PLAN.md")
+	input := bufio.NewReader(strings.NewReader("Manage PLAN.md"))
 	var output bytes.Buffer
 
 	instruction, err := promptForInstruction(input, &output, false)
@@ -60,7 +61,7 @@ func TestPromptForInstructionEOFWithoutNewline(t *testing.T) {
 }
 
 func TestPromptForInstructionImmediateEOF(t *testing.T) {
-	input := strings.NewReader("")
+	input := bufio.NewReader(strings.NewReader(""))
 	var output bytes.Buffer
 
 	_, err := promptForInstruction(input, &output, false)
@@ -77,7 +78,7 @@ func TestBuildIntakeCommand(t *testing.T) {
 	runID := "intake-20250101-000000-abcdef"
 	now := time.Unix(1735689600, 0).UTC()
 
-	cmd, err := buildIntakeCommand(runID, inputs, now, cfg)
+	cmd, err := buildIntakeCommand(runID, inputs, now, cfg, "", "")
 	require.NoError(t, err)
 
 	require.Equal(t, protocol.MessageKindCommand, cmd.Kind)
@@ -89,6 +90,34 @@ func TestBuildIntakeCommand(t *testing.T) {
 
 	timeout := resolveTimeout(cfg, "intake", 180)
 	require.WithinDuration(t, now.Add(time.Duration(timeout)*time.Second), cmd.Deadline, time.Second)
+}
+
+func TestPromptPlanSelectionNonTTY(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("2\n"))
+	var out bytes.Buffer
+	candidates := []planCandidate{
+		{Path: "PLAN.md", Confidence: 0.8},
+		{Path: "docs/plan_v2.md", Confidence: 0.9},
+	}
+
+	index, err := promptPlanSelection(reader, &out, false, candidates, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, index)
+	require.Contains(t, out.String(), "Select plan candidate")
+}
+
+func TestPromptTaskSelectionNonTTY(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("1,2\n"))
+	var out bytes.Buffer
+	tasks := []derivedTask{
+		{ID: "TASK-1", Title: "One"},
+		{ID: "TASK-2", Title: "Two"},
+	}
+
+	selected, err := promptTaskSelection(reader, &out, false, tasks)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"TASK-1", "TASK-2"}, selected)
+	require.Contains(t, out.String(), "Select tasks to approve")
 }
 
 func TestRunIntakeFlowSuccess(t *testing.T) {
@@ -113,7 +142,7 @@ func TestRunIntakeFlowSuccess(t *testing.T) {
 	var output bytes.Buffer
 	command := &cobra.Command{}
 	command.SetContext(context.Background())
-	command.SetIn(strings.NewReader("Manage PLAN.md\n"))
+	command.SetIn(strings.NewReader("Manage PLAN.md\n1\n\n"))
 	command.SetOut(&output)
 	command.SetErr(&output)
 
@@ -124,11 +153,14 @@ func TestRunIntakeFlowSuccess(t *testing.T) {
 	require.NotEmpty(t, outcome.RunID)
 	require.NotNil(t, outcome.FinalEvent)
 	require.NotEmpty(t, outcome.LogPath)
+	require.NotNil(t, outcome.Decision)
+	require.Equal(t, "approved", outcome.Decision.Status)
+	require.Equal(t, "PLAN.md", outcome.Decision.ApprovedPlan)
 
 	data := output.String()
 	require.Contains(t, data, "Running workspace discovery")
-	require.Contains(t, data, "Top plan candidates")
-	require.Contains(t, data, "PLAN.md")
+	require.Contains(t, data, "Plan candidates:")
+	require.Contains(t, data, "Approved plan: PLAN.md")
 	require.Contains(t, data, "Intake transcript written")
 
 	eventsDir := filepath.Join(workspaceRoot, "events")
@@ -185,7 +217,7 @@ func TestRunIntakeFlowContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	command := &cobra.Command{}
 	command.SetContext(ctx)
-	command.SetIn(strings.NewReader("Manage PLAN.md\n"))
+	command.SetIn(strings.NewReader("Manage PLAN.md\n1\n"))
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
 
