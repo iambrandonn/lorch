@@ -99,7 +99,7 @@ func TestSchedulerWithLoggingAndTranscripts(t *testing.T) {
 	taskID := "T-TEST-INTEGRATION"
 	goal := "test with logging and transcripts"
 
-	if err := scheduler.ExecuteTask(ctx, taskID, goal); err != nil {
+	if err := scheduler.ExecuteTask(ctx, taskID, map[string]any{"goal": goal}); err != nil {
 		t.Fatalf("ExecuteTask failed: %v", err)
 	}
 

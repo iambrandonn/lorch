@@ -392,7 +392,7 @@ type recordingExecutor struct {
 	sequence []string
 }
 
-func (r *recordingExecutor) ExecuteTask(ctx context.Context, taskID string, goal string) error {
+func (r *recordingExecutor) ExecuteTask(ctx context.Context, taskID string, inputs map[string]any) error {
 	r.sequence = append(r.sequence, taskID)
 	return nil
 }

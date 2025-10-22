@@ -123,14 +123,14 @@ When in doubt, consolidate multiple documents into a single phase summary rather
   - Generic agent shim (`claude-agent`)
   - Fixture-based mock harness (`claude-fixture`)
   - Deterministic file discovery service
-
 - **[Phase 2.2: CLI Intake Loop](./phase-2.2.md)** ✅
 - **[Phase 2.3: Plan Negotiation & Approvals](./phase-2.3.md)** ✅ (Summary; see [final review](./phase-2.3-review-final.md))
 - **[Phase 2.4 Task A: Task Activation Mapping](./phase-2.4-task-a.md)** ✅
   - Activation pipeline: Intake approvals → concrete tasks → scheduler integration
   - Integration test validates orchestration → builder → reviewer → spec-maintainer
   - Validation framework with fail-closed decision handling
-- **Phase 2.4 Task B/C: Scheduler Enqueueing & Traceability** (planned)
+- **[Phase 2.4 Task B: Intake Execution Pipeline Review](./phase-2.4-task-b-review.md)** ✅
+- **Phase 2.4 Task C: Intake Traceability Metadata** (planned)
 - **Phase 2.5: UX Polish & Documentation** (planned)
 
 ### Phase 3: Interactive Configuration

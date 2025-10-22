@@ -125,17 +125,39 @@ func runResume(cmd *cobra.Command, args []string) error {
 
 	logger.Info("found pending commands", "count", len(pending))
 
-	// Find task in config
-	var task *config.Task
-	for i := range cfg.Tasks {
-		if cfg.Tasks[i].ID == state.TaskID {
-			task = &cfg.Tasks[i]
-			break
+	// Determine task inputs: use stored inputs for idempotent resume (P2.4 Task B review)
+	var inputs map[string]any
+	if state.CurrentTaskInputs != nil && len(state.CurrentTaskInputs) > 0 {
+		// P2.4 Task B: use stored inputs to ensure idempotency keys match
+		logger.Info("resuming with stored task inputs", "task_id", state.TaskID)
+		inputs = state.CurrentTaskInputs
+	} else if state.Intake != nil && state.Intake.LastDecision != nil {
+		// P2.4 Task B: older intake-derived run without stored inputs (backward compat)
+		logger.Warn("resuming intake run without stored inputs, idempotency may not match", "task_id", state.TaskID)
+		inputs = map[string]any{
+			"instruction":   state.Intake.Instruction,
+			"approved_plan": state.Intake.LastDecision.ApprovedPlan,
+			"goal":          state.TaskID,
 		}
-	}
-
-	if task == nil {
-		return fmt.Errorf("task %s not found in config", state.TaskID)
+		if len(state.Intake.LastClarifications) > 0 {
+			inputs["clarifications"] = state.Intake.LastClarifications
+		}
+		if len(state.Intake.ConflictResolutions) > 0 {
+			inputs["conflict_resolutions"] = state.Intake.ConflictResolutions
+		}
+	} else {
+		// Phase 1: config-based task
+		var task *config.Task
+		for i := range cfg.Tasks {
+			if cfg.Tasks[i].ID == state.TaskID {
+				task = &cfg.Tasks[i]
+				break
+			}
+		}
+		if task == nil {
+			return fmt.Errorf("task %s not found in config", state.TaskID)
+		}
+		inputs = map[string]any{"goal": task.Goal}
 	}
 
 	// Reopen event log for appending
@@ -204,7 +226,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 	// Resume execution using ledger-aware resume
 	// This will skip commands that already have terminal events
 	logger.Info("resuming task execution...")
-	if err := sched.ResumeTask(ctx, state.TaskID, task.Goal, lg); err != nil {
+	if err := sched.ResumeTask(ctx, state.TaskID, inputs, lg); err != nil {
 		state.MarkFailed()
 		runstate.SaveRunState(state, statePath)
 		return fmt.Errorf("task execution failed: %w", err)

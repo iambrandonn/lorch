@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/iambrandonn/lorch/internal/activation"
 	"github.com/iambrandonn/lorch/internal/config"
 	"github.com/iambrandonn/lorch/internal/discovery"
 	"github.com/iambrandonn/lorch/internal/eventlog"
@@ -102,11 +103,38 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	if taskID == "" {
+		// P2.4: NL intake → activation → execution flow
 		outcome, err := runIntakeFlow(cmd, cfg, workspaceRoot, logger)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(outWriter, "Natural language intake completed. Transcript: %s\n", outcome.LogPath)
+
+		// If no tasks were approved, stop here (intake only)
+		if outcome.Decision == nil || len(outcome.Decision.ApprovedTasks) == 0 {
+			fmt.Fprintf(outWriter, "Natural language intake completed. Transcript: %s\n", outcome.LogPath)
+			return nil
+		}
+
+		// P2.4 Task B: Execute the approved tasks
+		// Create context and snapshot for execution
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+
+		snap, err := snapshot.CaptureSnapshot(workspaceRoot)
+		if err != nil {
+			return fmt.Errorf("failed to capture snapshot for execution: %w", err)
+		}
+
+		snapshotPath := filepath.Join(workspaceRoot, "snapshots", snap.SnapshotID+".manifest.json")
+		if err := snapshot.SaveSnapshot(snap, snapshotPath); err != nil {
+			return fmt.Errorf("failed to save execution snapshot: %w", err)
+		}
+
+		// Execute approved tasks through scheduler pipeline
+		if err := executeApprovedTasks(ctx, cmd, outcome, cfg, workspaceRoot, snap.SnapshotID, logger); err != nil {
+			return fmt.Errorf("task execution failed: %w", err)
+		}
+
 		return nil
 	}
 
@@ -164,61 +192,17 @@ func runRun(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	// Create agent supervisors
-	builderSup, err := agentSupervisorFactory(cfg.Agents.Builder, protocol.AgentTypeBuilder, logger)
+	// Set up execution environment (agents + scheduler)
+	env, err := setupExecutionEnvironment(ctx, cfg, workspaceRoot, snap.SnapshotID, evtLog, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create builder supervisor: %w", err)
+		return err
 	}
-
-	reviewerSup, err := agentSupervisorFactory(cfg.Agents.Reviewer, protocol.AgentTypeReviewer, logger)
-	if err != nil {
-		return fmt.Errorf("failed to create reviewer supervisor: %w", err)
-	}
-
-	specMaintainerSup, err := agentSupervisorFactory(cfg.Agents.SpecMaintainer, protocol.AgentTypeSpecMaintainer, logger)
-	if err != nil {
-		return fmt.Errorf("failed to create spec maintainer supervisor: %w", err)
-	}
-
-	builder, ok := builderSup.(*supervisor.AgentSupervisor)
-	if !ok {
-		return fmt.Errorf("unexpected supervisor type for builder")
-	}
-	reviewer, ok := reviewerSup.(*supervisor.AgentSupervisor)
-	if !ok {
-		return fmt.Errorf("unexpected supervisor type for reviewer")
-	}
-	specMaintainer, ok := specMaintainerSup.(*supervisor.AgentSupervisor)
-	if !ok {
-		return fmt.Errorf("unexpected supervisor type for spec maintainer")
-	}
-
-	// Start agents
-	if err := builder.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start builder: %w", err)
-	}
-	defer builder.Stop(context.Background())
-
-	if err := reviewer.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start reviewer: %w", err)
-	}
-	defer reviewer.Stop(context.Background())
-
-	if err := specMaintainer.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start spec maintainer: %w", err)
-	}
-	defer specMaintainer.Stop(context.Background())
-
-	// Create scheduler
-	sched := scheduler.NewScheduler(builder, reviewer, specMaintainer, logger)
-	sched.SetSnapshotID(snap.SnapshotID)
-	sched.SetWorkspaceRoot(workspaceRoot)
-	sched.SetEventLogger(evtLog)
-	sched.SetTranscriptFormatter(transcript.NewFormatter())
+	defer env.cleanup()
 
 	// Execute task
 	logger.Info("starting task execution...")
-	if err := sched.ExecuteTask(ctx, taskID, task.Goal); err != nil {
+	inputs := map[string]any{"goal": task.Goal}
+	if err := env.scheduler.ExecuteTask(ctx, taskID, inputs); err != nil {
 		state.MarkFailed()
 		runstate.SaveRunState(state, statePath)
 		return fmt.Errorf("task execution failed: %w", err)
@@ -774,6 +758,198 @@ func runIntakeFlow(cmd *cobra.Command, cfg *config.Config, workspaceRoot string,
 	}
 
 	return outcome, nil
+}
+
+// executeApprovedTasks activates and executes intake-derived tasks through the scheduler pipeline.
+// This implements P2.4 Task B: connecting intake approval → task execution.
+func executeApprovedTasks(
+	ctx context.Context,
+	cmd *cobra.Command,
+	outcome *IntakeOutcome,
+	cfg *config.Config,
+	workspaceRoot string,
+	snapshotID string,
+	logger *slog.Logger,
+) error {
+	// No-op if no tasks were approved
+	if outcome.Decision == nil || len(outcome.Decision.ApprovedTasks) == 0 {
+		logger.Info("no tasks approved, skipping execution")
+		return nil
+	}
+
+	outputWriter := cmd.OutOrStdout()
+	fmt.Fprintln(outputWriter)
+	fmt.Fprintf(outputWriter, "Activating %d approved tasks...\n", len(outcome.Decision.ApprovedTasks))
+
+	// Prepare activation input from intake outcome
+	// Extract derived tasks from finalEvent payload
+	var derivedTasks []derivedTask
+	if outcome.FinalEvent != nil && outcome.FinalEvent.Payload != nil {
+		if rawTasks, ok := outcome.FinalEvent.Payload["derived_tasks"].([]any); ok {
+			for _, raw := range rawTasks {
+				entry, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				id, _ := entry["id"].(string)
+				title, _ := entry["title"].(string)
+				files := extractStringSlice(entry["files"])
+				derivedTasks = append(derivedTasks, derivedTask{
+					ID:    id,
+					Title: title,
+					Files: files,
+				})
+			}
+		}
+	}
+
+	// Load run state to check for already-activated tasks (idempotent resume)
+	statePath := runstate.GetRunStatePath(workspaceRoot)
+	state, err := runstate.LoadRunState(statePath)
+	if err != nil {
+		// Differentiate missing state from corruption (P2.4 Task B review finding #3)
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to load run state (possible corruption): %w", err)
+		}
+		// No state exists yet, create new intake state
+		state = runstate.NewIntakeState(outcome.RunID, snapshotID, outcome.Instruction, nil)
+	}
+
+	// Build activation input
+	activationInput := buildActivationInput(outcome, derivedTasks, workspaceRoot, snapshotID, state)
+
+	// Prepare tasks via activation package
+	tasks, err := prepareActivationTasks(activationInput)
+	if err != nil {
+		return fmt.Errorf("failed to prepare activation tasks: %w", err)
+	}
+
+	if len(tasks) == 0 {
+		logger.Info("no new tasks to activate (all already completed)")
+		return nil
+	}
+
+	fmt.Fprintf(outputWriter, "Prepared %d tasks for execution\n", len(tasks))
+
+	// Create execution event log (separate from intake log)
+	runID := generateExecutionRunID(outcome.RunID)
+	eventLogPath := filepath.Join(workspaceRoot, "events", runID+".ndjson")
+	evtLog, err := eventlog.NewEventLog(eventLogPath, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create execution event log: %w", err)
+	}
+	defer evtLog.Close()
+
+	// Set up execution environment
+	env, err := setupExecutionEnvironment(ctx, cfg, workspaceRoot, snapshotID, evtLog, logger)
+	if err != nil {
+		return fmt.Errorf("failed to setup execution environment: %w", err)
+	}
+	defer env.cleanup()
+
+	// Update run state to execution stage
+	// P2.4 Task B review finding #1: assign execution snapshot ID for correct resume
+	state.RunID = runID
+	state.SnapshotID = snapshotID
+	state.SetStage(runstate.StageImplement)
+	if err := runstate.SaveRunState(state, statePath); err != nil {
+		logger.Warn("failed to save run state", "error", err)
+	}
+
+	// Execute each task through scheduler pipeline
+	for i, task := range tasks {
+		fmt.Fprintln(outputWriter)
+		fmt.Fprintf(outputWriter, "Executing task %d/%d: %s (%s)\n", i+1, len(tasks), task.Title, task.ID)
+
+		// Prepare full command inputs
+		inputs := task.ToCommandInputs()
+
+		// P2.4 Task B review finding #2 & resume idempotency:
+		// Persist current task ID and full inputs for idempotent resume
+		state.TaskID = task.ID
+		state.SetCurrentTaskInputs(inputs)
+		if err := runstate.SaveRunState(state, statePath); err != nil {
+			logger.Warn("failed to save run state before task execution", "error", err)
+		}
+
+		// Execute via scheduler (implement → review → spec-maintainer)
+		if err := env.scheduler.ExecuteTask(ctx, task.ID, inputs); err != nil {
+			state.MarkFailed()
+			runstate.SaveRunState(state, statePath)
+			return fmt.Errorf("task %s execution failed: %w", task.ID, err)
+		}
+
+		// Mark task as activated in run state
+		state.MarkTaskActivated(task.ID)
+		if err := runstate.SaveRunState(state, statePath); err != nil {
+			logger.Warn("failed to save run state", "error", err)
+		}
+
+		fmt.Fprintf(outputWriter, "Task %s completed successfully\n", task.ID)
+	}
+
+	// Mark run complete
+	state.MarkCompleted()
+	if err := runstate.SaveRunState(state, statePath); err != nil {
+		logger.Warn("failed to save final run state", "error", err)
+	}
+
+	fmt.Fprintln(outputWriter)
+	fmt.Fprintf(outputWriter, "All %d tasks completed successfully\n", len(tasks))
+	fmt.Fprintf(outputWriter, "Execution transcript: %s\n", eventLogPath)
+
+	return nil
+}
+
+// buildActivationInput constructs activation.Input from intake outcome for P2.4 Task B.
+func buildActivationInput(
+	outcome *IntakeOutcome,
+	derivedTasks []derivedTask,
+	workspaceRoot string,
+	snapshotID string,
+	state *runstate.RunState,
+) activation.Input {
+	// Convert derivedTask to activation.DerivedTask
+	actDerived := make([]activation.DerivedTask, len(derivedTasks))
+	for i, dt := range derivedTasks {
+		actDerived[i] = activation.DerivedTask{
+			ID:    dt.ID,
+			Title: dt.Title,
+			Files: dt.Files,
+		}
+	}
+
+	// Build map of already-activated tasks for idempotent resume
+	alreadyActivated := make(map[string]struct{})
+	for _, taskID := range state.ActivatedTaskIDs {
+		alreadyActivated[taskID] = struct{}{}
+	}
+
+	return activation.Input{
+		RunID:               outcome.RunID,
+		SnapshotID:          snapshotID,
+		WorkspaceRoot:       workspaceRoot,
+		Instruction:         outcome.Instruction,
+		ApprovedPlan:        outcome.Decision.ApprovedPlan,
+		ApprovedTaskIDs:     outcome.Decision.ApprovedTasks,
+		Clarifications:      outcome.Clarifications,
+		ConflictResolutions: outcome.ConflictResolutions,
+		DerivedTasks:        actDerived,
+		DecisionStatus:      outcome.Decision.Status,
+		IntakeCorrelationID: outcome.Decision.CorrelationID,
+		AlreadyActivated:    alreadyActivated,
+	}
+}
+
+// prepareActivationTasks wraps activation.PrepareTasks for P2.4 Task B.
+func prepareActivationTasks(input activation.Input) ([]activation.Task, error) {
+	return activation.PrepareTasks(input)
+}
+
+// generateExecutionRunID creates a run ID for the execution phase, distinct from intake run ID.
+func generateExecutionRunID(intakeRunID string) string {
+	// Extract timestamp portion from intake run ID if possible, otherwise use current time
+	return fmt.Sprintf("run-%s-%s", time.Now().UTC().Format("20060102-150405"), uuid.New().String()[:8])
 }
 
 func cloneInputsMap(src map[string]any) map[string]any {
@@ -1381,6 +1557,87 @@ func isTerminalFile(f *os.File) bool {
 		return false
 	}
 	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+// executionEnvironment holds all components needed for task execution
+type executionEnvironment struct {
+	scheduler *scheduler.Scheduler
+	cleanup   func()
+}
+
+// setupExecutionEnvironment creates agents, scheduler, and returns a cleanup function.
+// This is used by both --task mode and P2.4 intake-derived task execution.
+func setupExecutionEnvironment(
+	ctx context.Context,
+	cfg *config.Config,
+	workspaceRoot string,
+	snapshotID string,
+	eventLog *eventlog.EventLog,
+	logger *slog.Logger,
+) (*executionEnvironment, error) {
+	// Create agent supervisors
+	builderSup, err := agentSupervisorFactory(cfg.Agents.Builder, protocol.AgentTypeBuilder, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create builder supervisor: %w", err)
+	}
+
+	reviewerSup, err := agentSupervisorFactory(cfg.Agents.Reviewer, protocol.AgentTypeReviewer, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create reviewer supervisor: %w", err)
+	}
+
+	specMaintainerSup, err := agentSupervisorFactory(cfg.Agents.SpecMaintainer, protocol.AgentTypeSpecMaintainer, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create spec maintainer supervisor: %w", err)
+	}
+
+	builder, ok := builderSup.(*supervisor.AgentSupervisor)
+	if !ok {
+		return nil, fmt.Errorf("unexpected supervisor type for builder")
+	}
+	reviewer, ok := reviewerSup.(*supervisor.AgentSupervisor)
+	if !ok {
+		return nil, fmt.Errorf("unexpected supervisor type for reviewer")
+	}
+	specMaintainer, ok := specMaintainerSup.(*supervisor.AgentSupervisor)
+	if !ok {
+		return nil, fmt.Errorf("unexpected supervisor type for spec maintainer")
+	}
+
+	// Start agents
+	if err := builder.Start(ctx); err != nil {
+		return nil, fmt.Errorf("failed to start builder: %w", err)
+	}
+
+	if err := reviewer.Start(ctx); err != nil {
+		builder.Stop(context.Background())
+		return nil, fmt.Errorf("failed to start reviewer: %w", err)
+	}
+
+	if err := specMaintainer.Start(ctx); err != nil {
+		builder.Stop(context.Background())
+		reviewer.Stop(context.Background())
+		return nil, fmt.Errorf("failed to start spec maintainer: %w", err)
+	}
+
+	// Create scheduler
+	sched := scheduler.NewScheduler(builder, reviewer, specMaintainer, logger)
+	sched.SetSnapshotID(snapshotID)
+	sched.SetWorkspaceRoot(workspaceRoot)
+	sched.SetEventLogger(eventLog)
+	sched.SetTranscriptFormatter(transcript.NewFormatter())
+
+	// Create cleanup function
+	cleanup := func() {
+		builder.Stop(context.Background())
+		reviewer.Stop(context.Background())
+		specMaintainer.Stop(context.Background())
+	}
+
+	return &executionEnvironment{
+		scheduler: sched,
+		cleanup:   cleanup,
+	}, nil
 }
 
 // realAgentSupervisorFactory creates an agent supervisor from config

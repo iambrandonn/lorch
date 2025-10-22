@@ -78,7 +78,7 @@ func TestSchedulerBasicFlow(t *testing.T) {
 	taskID := "T-TEST-001"
 	goal := "test implementation"
 
-	if err := scheduler.ExecuteTask(ctx, taskID, goal); err != nil {
+	if err := scheduler.ExecuteTask(ctx, taskID, map[string]any{"goal": goal}); err != nil {
 		t.Fatalf("ExecuteTask failed: %v", err)
 	}
 
@@ -189,7 +189,7 @@ func TestSchedulerReviewLoop(t *testing.T) {
 	taskID := "T-TEST-REVIEW-LOOP"
 	goal := "test review iteration"
 
-	if err := scheduler.ExecuteTask(ctx, taskID, goal); err != nil {
+	if err := scheduler.ExecuteTask(ctx, taskID, map[string]any{"goal": goal}); err != nil {
 		t.Fatalf("ExecuteTask failed: %v", err)
 	}
 
@@ -301,7 +301,7 @@ func TestSchedulerSpecLoop(t *testing.T) {
 	taskID := "T-TEST-SPEC-LOOP"
 	goal := "test spec iteration"
 
-	if err := scheduler.ExecuteTask(ctx, taskID, goal); err != nil {
+	if err := scheduler.ExecuteTask(ctx, taskID, map[string]any{"goal": goal}); err != nil {
 		t.Fatalf("ExecuteTask failed: %v", err)
 	}
 
@@ -507,7 +507,7 @@ func TestSchedulerBuilderMissingTests(t *testing.T) {
 	taskID := "T-TEST-MISSING-TESTS"
 	goal := "test missing tests payload"
 
-	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	err = scheduler.ExecuteTask(ctx, taskID, map[string]any{"goal": goal})
 	if err == nil {
 		t.Fatal("Expected ExecuteTask to fail with missing tests payload, but it succeeded")
 	}
@@ -577,7 +577,7 @@ func TestSchedulerBuilderInvalidTests(t *testing.T) {
 	taskID := "T-TEST-INVALID-TESTS"
 	goal := "test invalid tests payload"
 
-	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	err = scheduler.ExecuteTask(ctx, taskID, map[string]any{"goal": goal})
 	if err == nil {
 		t.Fatal("Expected ExecuteTask to fail with invalid tests payload, but it succeeded")
 	}
@@ -647,7 +647,7 @@ func TestSchedulerBuilderTestsFailed(t *testing.T) {
 	taskID := "T-TEST-TESTS-FAILED"
 	goal := "test failed tests"
 
-	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	err = scheduler.ExecuteTask(ctx, taskID, map[string]any{"goal": goal})
 	if err == nil {
 		t.Fatal("Expected ExecuteTask to fail with failing tests, but it succeeded")
 	}
@@ -724,7 +724,7 @@ func TestSchedulerBuilderTestsFailedAllowed(t *testing.T) {
 	taskID := "T-TEST-TESTS-FAILED-ALLOWED"
 	goal := "test failed tests with allowed failures"
 
-	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	err = scheduler.ExecuteTask(ctx, taskID, map[string]any{"goal": goal})
 	if err != nil {
 		t.Fatalf("ExecuteTask failed unexpectedly: %v", err)
 	}
@@ -820,7 +820,7 @@ func TestSchedulerSpecNotesArtifacts(t *testing.T) {
 
 	// The task will fail at spec.changes_requested, but that's expected for this test
 	// We're testing the first iteration where spec.changes_requested is emitted
-	err = scheduler.ExecuteTask(ctx, taskID, goal)
+	err = scheduler.ExecuteTask(ctx, taskID, map[string]any{"goal": goal})
 	// Note: This will actually succeed because the fixture includes implement_changes/review responses
 	if err != nil {
 		t.Logf("Task execution error (expected for spec loop): %v", err)

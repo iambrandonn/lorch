@@ -169,7 +169,7 @@ func TestCrashAndResumeAfterBuilderCompleted(t *testing.T) {
 		sched.SetTranscriptFormatter(transcript.NewFormatter())
 
 		// Resume task (will skip completed commands)
-		if err := sched.ResumeTask(ctx, taskID, "test goal", lg); err != nil {
+		if err := sched.ResumeTask(ctx, taskID, map[string]any{"goal": "test goal"}, lg); err != nil {
 			t.Fatalf("resume execution failed: %v", err)
 		}
 
@@ -407,7 +407,7 @@ func TestCrashAndResumeAfterSpecChangesRequested(t *testing.T) {
 		// Manually execute workflow: implement → review → update_spec (which returns spec.changes_requested)
 		// Step 1: Implement
 		t.Log("Step 1: Executing implement")
-		if err := sched.executeImplement(ctx, taskID, "test goal"); err != nil {
+		if err := sched.executeImplement(ctx, taskID, map[string]any{"goal": "test goal"}); err != nil {
 			t.Fatalf("failed to execute implement: %v", err)
 		}
 
@@ -537,7 +537,7 @@ func TestCrashAndResumeAfterSpecChangesRequested(t *testing.T) {
 
 		// Resume task - per P1.4-ANSWERS A5, should continue from implement_changes
 		t.Log("Starting ResumeTask...")
-		if err := sched.ResumeTask(ctx, taskID, "test spec loop crash", lg); err != nil {
+		if err := sched.ResumeTask(ctx, taskID, map[string]any{"goal": "test spec loop crash"}, lg); err != nil {
 			t.Fatalf("resume execution failed: %v", err)
 		}
 		t.Log("ResumeTask completed")

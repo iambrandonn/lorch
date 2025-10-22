@@ -34,18 +34,20 @@ const (
 // RunState represents the persisted state of a run
 // Based on P1.3-REVIEW-ANSWERS #4
 type RunState struct {
-	RunID          string            `json:"run_id"`
-	Status         Status            `json:"status"`
-	TaskID         string            `json:"task_id"`
-	CorrelationID  string            `json:"correlation_id,omitempty"`
-	SnapshotID     string            `json:"snapshot_id"`
-	CurrentStage   Stage             `json:"current_stage"`
-	StartedAt      time.Time         `json:"started_at"`
-	CompletedAt    *time.Time        `json:"completed_at,omitempty"`
-	LastCommandID  string            `json:"last_command_id,omitempty"`
-	LastEventID    string            `json:"last_event_id,omitempty"`
-	TerminalEvents map[string]string `json:"terminal_events,omitempty"`
-	Intake         *IntakeState      `json:"intake,omitempty"`
+	RunID            string            `json:"run_id"`
+	Status           Status            `json:"status"`
+	TaskID           string            `json:"task_id"`
+	CorrelationID    string            `json:"correlation_id,omitempty"`
+	SnapshotID       string            `json:"snapshot_id"`
+	CurrentStage     Stage             `json:"current_stage"`
+	StartedAt        time.Time         `json:"started_at"`
+	CompletedAt      *time.Time        `json:"completed_at,omitempty"`
+	LastCommandID    string            `json:"last_command_id,omitempty"`
+	LastEventID      string            `json:"last_event_id,omitempty"`
+	TerminalEvents   map[string]string `json:"terminal_events,omitempty"`
+	Intake           *IntakeState      `json:"intake,omitempty"`
+	ActivatedTaskIDs []string          `json:"activated_task_ids,omitempty"`     // P2.4: tracks completed intake-derived tasks
+	CurrentTaskInputs map[string]any   `json:"current_task_inputs,omitempty"` // P2.4: stores full command inputs for idempotent resume
 }
 
 // NewRunState creates a new run state
@@ -229,6 +231,35 @@ func (s *RunState) RecordIntakeCommand(action string, inputs map[string]any, ide
 	s.Intake.PendingInputs = cloneGenericMap(inputs)
 	s.Intake.PendingIdempotencyKey = idempotencyKey
 	s.Intake.PendingCorrelationID = correlationID
+}
+
+// MarkTaskActivated records that a task has been successfully executed.
+// Used by P2.4 activation flow to track which intake-derived tasks have completed.
+func (s *RunState) MarkTaskActivated(taskID string) {
+	// Check if already recorded
+	for _, id := range s.ActivatedTaskIDs {
+		if id == taskID {
+			return
+		}
+	}
+	s.ActivatedTaskIDs = append(s.ActivatedTaskIDs, taskID)
+}
+
+// IsTaskActivated checks if a task has already been executed.
+// Used for idempotent resume after crash during multi-task activation.
+func (s *RunState) IsTaskActivated(taskID string) bool {
+	for _, id := range s.ActivatedTaskIDs {
+		if id == taskID {
+			return true
+		}
+	}
+	return false
+}
+
+// SetCurrentTaskInputs stores the full command inputs for the current task.
+// Used by P2.4 to ensure idempotent resume produces identical idempotency keys.
+func (s *RunState) SetCurrentTaskInputs(inputs map[string]any) {
+	s.CurrentTaskInputs = cloneGenericMap(inputs)
 }
 
 func cloneGenericMap(src map[string]any) map[string]any {

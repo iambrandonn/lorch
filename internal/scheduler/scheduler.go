@@ -114,12 +114,15 @@ func (s *Scheduler) SetWorkspaceRoot(workspaceRoot string) {
 }
 
 // ExecuteTask runs the full Implement → Review → Spec Maintenance flow
-func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, goal string) error {
+// inputs should contain task-specific data (e.g., "goal" for legacy tasks,
+// or richer activation metadata for P2.4 intake-derived tasks)
+func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, inputs map[string]any) error {
+	goal := extractGoal(inputs)
 	s.logger.Info("starting task execution", "task_id", taskID, "goal", goal)
 
 	// Stage 1: Implement
 	s.logger.Info("stage: implement", "task_id", taskID)
-	if err := s.executeImplement(ctx, taskID, goal); err != nil {
+	if err := s.executeImplement(ctx, taskID, inputs); err != nil {
 		return fmt.Errorf("implement failed: %w", err)
 	}
 
@@ -250,7 +253,8 @@ func (s *Scheduler) detectMidSpecLoop(lg *ledger.Ledger, taskID string) (bool, s
 
 // ResumeTask continues a task from where it left off by checking the ledger
 // Only commands that don't have terminal events will be executed
-func (s *Scheduler) ResumeTask(ctx context.Context, taskID string, goal string, lg *ledger.Ledger) error {
+func (s *Scheduler) ResumeTask(ctx context.Context, taskID string, inputs map[string]any, lg *ledger.Ledger) error {
+	goal := extractGoal(inputs)
 	s.logger.Info("resuming task execution", "task_id", taskID, "goal", goal)
 
 	// Get terminal events from ledger
@@ -271,7 +275,7 @@ func (s *Scheduler) ResumeTask(ctx context.Context, taskID string, goal string, 
 	// Stage 1: Implement (if not complete)
 	if !implementComplete {
 		s.logger.Info("stage: implement (resuming)", "task_id", taskID)
-		if err := s.executeImplement(ctx, taskID, goal); err != nil {
+		if err := s.executeImplement(ctx, taskID, inputs); err != nil {
 			return fmt.Errorf("implement failed: %w", err)
 		}
 	}
@@ -544,12 +548,12 @@ func (s *Scheduler) validateBuilderTestResults(evt *protocol.Event) error {
 	return nil
 }
 
-func (s *Scheduler) executeImplement(ctx context.Context, taskID string, goal string) error {
+func (s *Scheduler) executeImplement(ctx context.Context, taskID string, inputs map[string]any) error {
 	cmd := s.makeCommand(
 		taskID,
 		protocol.AgentTypeBuilder,
 		protocol.ActionImplement,
-		map[string]any{"goal": goal},
+		inputs,
 	)
 
 	if err := s.sendCommand(s.builder, cmd); err != nil {
@@ -758,6 +762,22 @@ func (s *Scheduler) waitForEventReturn(ctx context.Context, sup *supervisor.Agen
 			s.notifyHeartbeat(hb)
 		}
 	}
+}
+
+// extractGoal extracts a goal string from inputs for logging purposes.
+// Falls back to reasonable defaults if "goal" key is missing.
+func extractGoal(inputs map[string]any) string {
+	if inputs == nil {
+		return "(no goal specified)"
+	}
+	if goal, ok := inputs["goal"].(string); ok && goal != "" {
+		return goal
+	}
+	// Fallback: try task_title for P2.4 activation tasks
+	if title, ok := inputs["task_title"].(string); ok && title != "" {
+		return title
+	}
+	return "(no goal specified)"
 }
 
 func (s *Scheduler) notifyEvent(evt *protocol.Event) {

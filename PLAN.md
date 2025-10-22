@@ -227,7 +227,14 @@ Introduce the orchestration agent, add NL intake flows, and route approved plans
   - ✅ Expected outputs populated from task files, correlation IDs threaded from intake
   - ✅ Robust validation: decision status (fail-closed), instruction, plan path (traversal protection), derived task titles
   - ✅ 13 passing tests covering all activation edge cases
-- **Task B**: enqueue tasks into the existing scheduler while preserving implement → review → spec-maintainer ordering and supporting additional `task_discovery` cycles mid-run.
+- **Task B** ✅: enqueue tasks into the existing scheduler while preserving implement → review → spec-maintainer ordering and supporting additional `task_discovery` cycles mid-run.
+  - ✅ Updated `scheduler.ExecuteTask` signature to accept `inputs map[string]any` for richer task metadata
+  - ✅ Added `ActivatedTaskIDs []string` to `RunState` for tracking completed tasks during multi-task runs
+  - ✅ Extracted `setupExecutionEnvironment()` helper for reusable agent/scheduler initialization
+  - ✅ Integrated `executeApprovedTasks()` in run.go to bridge intake → activation → execution
+  - ✅ Updated `activation.TaskExecutor` interface and `Activate()` to use new scheduler signature
+  - ✅ All existing tests updated and passing (scheduler, runstate, activation packages)
+  - ✅ End-to-end flow: `lorch run` (no --task) → NL intake → approval → execution of all approved tasks
 - **Task C**: ensure receipts/artifact metadata reflect intake origin (task titles, rationale, discovery id) for traceability.
 - **Exit criteria**: automated end-to-end test validates instruction → approval → implement/review/spec-maintainer completion with recorded traceability fields.
 
@@ -306,4 +313,7 @@ Improve diagnostics, recovery, and human control.
 - Supports intake resumability with pending command reconstruction.
 - Extracts magic strings to constants for maintainability.
 
-**Ready for Phase 2.4**: Task Activation Pipeline (map approved tasks → enqueue into scheduler with intake traceability).
+**Phase 2.4 (In Progress)**: Task Activation Pipeline
+- Task A Complete ✅: Activation package with task preparation and command building
+- Task B Complete ✅: Task execution pipeline integrated (intake → activation → scheduler)
+- **Ready for Task C**: Add intake traceability metadata to receipts and artifacts
