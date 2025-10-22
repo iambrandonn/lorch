@@ -229,3 +229,253 @@ func TestListReceipts(t *testing.T) {
 		t.Errorf("ListReceipts() for nonexistent task = %d, want 0", len(empty))
 	}
 }
+
+// TestNewReceiptWithTraceability validates that intake metadata is extracted correctly
+// from command inputs (P2.4 Task C - TR-001).
+func TestNewReceiptWithTraceability(t *testing.T) {
+	// Create command with intake traceability metadata
+	cmd := &protocol.Command{
+		TaskID:         "PLAN-1",
+		Action:         protocol.ActionImplement,
+		IdempotencyKey: "ik:test123",
+		MessageID:      "msg-cmd-001",
+		CorrelationID:  "corr-intake-abc|activate-def",
+		Version: protocol.Version{
+			SnapshotID: "snap-xyz",
+		},
+		Inputs: map[string]any{
+			"task_title":           "Implement user authentication",
+			"instruction":          "Add OAuth2 login flow",
+			"approved_plan":        "PLAN.md",
+			"clarifications":       []string{"Use Google OAuth", "Store tokens in Redis"},
+			"conflict_resolutions": []string{"Keep existing session logic"},
+		},
+	}
+
+	events := []*protocol.Event{
+		{
+			MessageID: "msg-e1",
+			Event:     protocol.EventBuilderCompleted,
+		},
+	}
+
+	receipt := NewReceipt(cmd, 1, events)
+
+	// Verify core fields
+	if receipt.TaskID != "PLAN-1" {
+		t.Errorf("TaskID = %s, want PLAN-1", receipt.TaskID)
+	}
+
+	// Verify traceability metadata extraction
+	if receipt.TaskTitle != "Implement user authentication" {
+		t.Errorf("TaskTitle = %q, want %q", receipt.TaskTitle, "Implement user authentication")
+	}
+
+	if receipt.Instruction != "Add OAuth2 login flow" {
+		t.Errorf("Instruction = %q, want %q", receipt.Instruction, "Add OAuth2 login flow")
+	}
+
+	if receipt.ApprovedPlan != "PLAN.md" {
+		t.Errorf("ApprovedPlan = %q, want %q", receipt.ApprovedPlan, "PLAN.md")
+	}
+
+	if receipt.IntakeCorrelationID != "corr-intake-abc" {
+		t.Errorf("IntakeCorrelationID = %q, want %q", receipt.IntakeCorrelationID, "corr-intake-abc")
+	}
+
+	if len(receipt.Clarifications) != 2 {
+		t.Errorf("Clarifications length = %d, want 2", len(receipt.Clarifications))
+	} else {
+		if receipt.Clarifications[0] != "Use Google OAuth" {
+			t.Errorf("Clarifications[0] = %q, want %q", receipt.Clarifications[0], "Use Google OAuth")
+		}
+	}
+
+	if len(receipt.ConflictResolutions) != 1 {
+		t.Errorf("ConflictResolutions length = %d, want 1", len(receipt.ConflictResolutions))
+	} else {
+		if receipt.ConflictResolutions[0] != "Keep existing session logic" {
+			t.Errorf("ConflictResolutions[0] = %q", receipt.ConflictResolutions[0])
+		}
+	}
+}
+
+// TestNewReceiptWithoutTraceability validates backward compatibility when
+// intake metadata is absent (e.g., Phase 1 tasks without intake).
+func TestNewReceiptWithoutTraceability(t *testing.T) {
+	cmd := &protocol.Command{
+		TaskID:         "T-0042",
+		Action:         protocol.ActionImplement,
+		IdempotencyKey: "ik:test123",
+		MessageID:      "msg-cmd-001",
+		CorrelationID:  "corr-T-0042-implement-abc",
+		Version: protocol.Version{
+			SnapshotID: "snap-xyz",
+		},
+		Inputs: map[string]any{
+			"goal": "Implement sections 3.1-3.3",
+		},
+	}
+
+	events := []*protocol.Event{
+		{
+			MessageID: "msg-e1",
+			Event:     protocol.EventBuilderCompleted,
+		},
+	}
+
+	receipt := NewReceipt(cmd, 1, events)
+
+	// Verify core fields still work
+	if receipt.TaskID != "T-0042" {
+		t.Errorf("TaskID = %s, want T-0042", receipt.TaskID)
+	}
+
+	// Verify traceability fields are empty (no panic, no error)
+	if receipt.TaskTitle != "" {
+		t.Errorf("TaskTitle should be empty for non-intake task, got %q", receipt.TaskTitle)
+	}
+
+	if receipt.IntakeCorrelationID != "" {
+		t.Errorf("IntakeCorrelationID should be empty for non-intake task, got %q", receipt.IntakeCorrelationID)
+	}
+}
+
+// TestExtractString validates the helper function for safe string extraction.
+func TestExtractString(t *testing.T) {
+	tests := []struct {
+		name     string
+		inputs   map[string]any
+		key      string
+		expected string
+	}{
+		{
+			name:     "valid string",
+			inputs:   map[string]any{"foo": "bar"},
+			key:      "foo",
+			expected: "bar",
+		},
+		{
+			name:     "missing key",
+			inputs:   map[string]any{"foo": "bar"},
+			key:      "baz",
+			expected: "",
+		},
+		{
+			name:     "nil inputs",
+			inputs:   nil,
+			key:      "foo",
+			expected: "",
+		},
+		{
+			name:     "wrong type",
+			inputs:   map[string]any{"foo": 123},
+			key:      "foo",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractString(tt.inputs, tt.key)
+			if result != tt.expected {
+				t.Errorf("extractString() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestExtractStringSlice validates the helper for safe slice extraction.
+func TestExtractStringSlice(t *testing.T) {
+	tests := []struct {
+		name     string
+		inputs   map[string]any
+		key      string
+		expected []string
+	}{
+		{
+			name:     "valid string slice",
+			inputs:   map[string]any{"items": []string{"a", "b"}},
+			key:      "items",
+			expected: []string{"a", "b"},
+		},
+		{
+			name:     "interface slice",
+			inputs:   map[string]any{"items": []interface{}{"a", "b"}},
+			key:      "items",
+			expected: []string{"a", "b"},
+		},
+		{
+			name:     "missing key",
+			inputs:   map[string]any{"foo": []string{"a"}},
+			key:      "items",
+			expected: nil,
+		},
+		{
+			name:     "nil inputs",
+			inputs:   nil,
+			key:      "items",
+			expected: nil,
+		},
+		{
+			name:     "wrong type",
+			inputs:   map[string]any{"items": "not a slice"},
+			key:      "items",
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractStringSlice(tt.inputs, tt.key)
+			if len(result) != len(tt.expected) {
+				t.Errorf("extractStringSlice() length = %d, want %d", len(result), len(tt.expected))
+				return
+			}
+			for i := range result {
+				if result[i] != tt.expected[i] {
+					t.Errorf("extractStringSlice()[%d] = %q, want %q", i, result[i], tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+// TestExtractIntakeCorrelationID validates correlation ID extraction logic.
+func TestExtractIntakeCorrelationID(t *testing.T) {
+	tests := []struct {
+		name          string
+		correlationID string
+		expected      string
+	}{
+		{
+			name:          "activation format",
+			correlationID: "corr-intake-abc|activate-def",
+			expected:      "corr-intake-abc",
+		},
+		{
+			name:          "intake only",
+			correlationID: "corr-intake-xyz",
+			expected:      "corr-intake-xyz",
+		},
+		{
+			name:          "non-intake correlation",
+			correlationID: "corr-T-0042-implement-abc",
+			expected:      "",
+		},
+		{
+			name:          "empty",
+			correlationID: "",
+			expected:      "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractIntakeCorrelationID(tt.correlationID)
+			if result != tt.expected {
+				t.Errorf("extractIntakeCorrelationID() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}

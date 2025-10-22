@@ -52,16 +52,18 @@ type Task struct {
 }
 
 // ToCommandInputs produces the canonical command inputs map that will be
-// passed to the builder implement command (future Task B wiring).
+// passed to the builder implement command (Task B wiring).
+// Includes traceability metadata for receipts (P2.4 Task C).
 func (t Task) ToCommandInputs() map[string]any {
 	return map[string]any{
-		"instruction":          t.Instruction,
-		"task_title":           t.Title,
-		"task_files":           t.Files,
-		"goal":                 t.Title,
-		"approved_plan":        t.ApprovedPlan,
-		"clarifications":       t.Clarifications,
-		"conflict_resolutions": t.ConflictResolutions,
+		"instruction":           t.Instruction,
+		"task_title":            t.Title,
+		"task_files":            t.Files,
+		"goal":                  t.Title,
+		"approved_plan":         t.ApprovedPlan,
+		"clarifications":        t.Clarifications,
+		"conflict_resolutions":  t.ConflictResolutions,
+		"intake_correlation_id": t.IntakeCorrelationID,
 	}
 }
 

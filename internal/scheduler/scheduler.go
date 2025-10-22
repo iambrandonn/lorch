@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,6 +67,10 @@ type Scheduler struct {
 	// Tracking for current command execution
 	currentCommand *protocol.Command
 	currentEvents  []*protocol.Event
+
+	// Task inputs to preserve across all commands (implement, review, spec)
+	// for traceability metadata (P2.4 Task C)
+	taskInputs map[string]any
 }
 
 // NewScheduler creates a new scheduler
@@ -119,6 +124,13 @@ func (s *Scheduler) SetWorkspaceRoot(workspaceRoot string) {
 func (s *Scheduler) ExecuteTask(ctx context.Context, taskID string, inputs map[string]any) error {
 	goal := extractGoal(inputs)
 	s.logger.Info("starting task execution", "task_id", taskID, "goal", goal)
+
+	// Store task inputs for traceability metadata propagation (P2.4 Task C)
+	// Make a copy to avoid mutation
+	s.taskInputs = make(map[string]any, len(inputs))
+	for k, v := range inputs {
+		s.taskInputs[k] = v
+	}
 
 	// Stage 1: Implement
 	s.logger.Info("stage: implement", "task_id", taskID)
@@ -556,6 +568,15 @@ func (s *Scheduler) executeImplement(ctx context.Context, taskID string, inputs 
 		inputs,
 	)
 
+	// Capture intake correlation ID from the command for traceability (P2.4 Task C)
+	// This preserves the intake lineage across all subsequent commands
+	if s.taskInputs != nil {
+		intakeCorrelation := extractIntakeCorrelationFromCommand(cmd)
+		if intakeCorrelation != "" {
+			s.taskInputs["intake_correlation_id"] = intakeCorrelation
+		}
+	}
+
 	if err := s.sendCommand(s.builder, cmd); err != nil {
 		return err
 	}
@@ -579,11 +600,16 @@ func (s *Scheduler) executeImplement(ctx context.Context, taskID string, inputs 
 }
 
 func (s *Scheduler) executeImplementChanges(ctx context.Context, taskID string) error {
+	// Use stored task inputs to preserve traceability metadata (P2.4 Task C)
+	inputs := s.taskInputs
+	if inputs == nil {
+		inputs = map[string]any{}
+	}
 	cmd := s.makeCommand(
 		taskID,
 		protocol.AgentTypeBuilder,
 		protocol.ActionImplementChanges,
-		map[string]any{},
+		inputs,
 	)
 
 	if err := s.sendCommand(s.builder, cmd); err != nil {
@@ -609,11 +635,16 @@ func (s *Scheduler) executeImplementChanges(ctx context.Context, taskID string) 
 }
 
 func (s *Scheduler) executeReview(ctx context.Context, taskID string) (string, error) {
+	// Use stored task inputs to preserve traceability metadata (P2.4 Task C)
+	inputs := s.taskInputs
+	if inputs == nil {
+		inputs = map[string]any{}
+	}
 	cmd := s.makeCommand(
 		taskID,
 		protocol.AgentTypeReviewer,
 		protocol.ActionReview,
-		map[string]any{},
+		inputs,
 	)
 
 	if err := s.sendCommand(s.reviewer, cmd); err != nil {
@@ -634,11 +665,16 @@ func (s *Scheduler) executeReview(ctx context.Context, taskID string) (string, e
 }
 
 func (s *Scheduler) executeSpecMaintenance(ctx context.Context, taskID string) (string, error) {
+	// Use stored task inputs to preserve traceability metadata (P2.4 Task C)
+	inputs := s.taskInputs
+	if inputs == nil {
+		inputs = map[string]any{}
+	}
 	cmd := s.makeCommand(
 		taskID,
 		protocol.AgentTypeSpecMaintainer,
 		protocol.ActionUpdateSpec,
-		map[string]any{},
+		inputs,
 	)
 
 	if err := s.sendCommand(s.specMaintainer, cmd); err != nil {
@@ -778,6 +814,28 @@ func extractGoal(inputs map[string]any) string {
 		return title
 	}
 	return "(no goal specified)"
+}
+
+// extractIntakeCorrelationFromCommand extracts the intake correlation ID from a command's
+// correlation ID field for traceability (P2.4 Task C).
+// Activation commands have format: "corr-intake-XXX|activate-YYY" or similar.
+// Returns the intake portion if found, otherwise empty string.
+func extractIntakeCorrelationFromCommand(cmd *protocol.Command) string {
+	if cmd == nil || cmd.CorrelationID == "" {
+		return ""
+	}
+
+	// Look for pipe separator indicating intake lineage
+	parts := strings.Split(cmd.CorrelationID, "|")
+	if len(parts) > 0 {
+		first := parts[0]
+		// If it contains "intake", it's the intake correlation
+		if strings.Contains(first, "intake") {
+			return first
+		}
+	}
+
+	return ""
 }
 
 func (s *Scheduler) notifyEvent(evt *protocol.Event) {

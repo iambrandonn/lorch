@@ -235,8 +235,16 @@ Introduce the orchestration agent, add NL intake flows, and route approved plans
   - ✅ Updated `activation.TaskExecutor` interface and `Activate()` to use new scheduler signature
   - ✅ All existing tests updated and passing (scheduler, runstate, activation packages)
   - ✅ End-to-end flow: `lorch run` (no --task) → NL intake → approval → execution of all approved tasks
-- **Task C**: ensure receipts/artifact metadata reflect intake origin (task titles, rationale, discovery id) for traceability.
-- **Exit criteria**: automated end-to-end test validates instruction → approval → implement/review/spec-maintainer completion with recorded traceability fields.
+- **Task C** ✅: ensure receipts/artifact metadata reflect intake origin (task titles, rationale, discovery id) for traceability.
+  - ✅ Extended `Receipt` struct with 6 traceability fields (TaskTitle, Instruction, ApprovedPlan, IntakeCorrelationID, Clarifications, ConflictResolutions)
+  - ✅ Updated `NewReceipt()` to extract metadata from command inputs with safe fallbacks
+  - ✅ Added helper functions: `extractString()`, `extractStringSlice()`, `extractIntakeCorrelationID()` for safe metadata extraction
+  - ✅ Modified `Scheduler` to preserve task inputs across all commands (implement, review, spec-maintainer) for metadata propagation
+  - ✅ Updated `Task.ToCommandInputs()` to include `intake_correlation_id` in command inputs
+  - ✅ Created TR-001 integration test (`TestReceiptTraceability`) validating end-to-end traceability from intake → receipts
+  - ✅ 7 new unit tests in receipt package + 1 integration test (all passing)
+  - ✅ Full test suite passes with no regressions
+- **Exit criteria** ✅ **MET**: TR-001 integration test validates instruction → approval → implement/review/spec-maintainer completion with recorded traceability fields in all receipts.
 
 ### P2.5 Milestone – UX Polish & Documentation
 - **Tests first**: snapshot tests for console messaging, including conflict summaries, approval confirmations, and multi-candidate menus.
