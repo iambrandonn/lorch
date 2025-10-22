@@ -220,7 +220,13 @@ Introduce the orchestration agent, add NL intake flows, and route approved plans
 
 ### P2.4 Milestone – Task Activation Pipeline
 - **Tests first**: integration test driving orchestration output into builder/reviewer/spec-maintainer mocks, plus regression for `task_discovery` follow-up tasks.
-- **Task A**: map approved plan objects into concrete task IDs, snapshots, and idempotency keys.
+- **Task A** ✅: map approved plan objects into concrete task IDs, snapshots, and idempotency keys.
+  - ✅ `internal/activation` package with `Input`, `Task`, `PrepareTasks()`, `BuildImplementCommand()`
+  - ✅ Integration test (`TestActivationEndToEnd`) validates orchestration → builder/reviewer/spec-maintainer pipeline
+  - ✅ `task_discovery` regression test (`TestTaskActivationDiscoveryExpansion`) validates deduplication
+  - ✅ Expected outputs populated from task files, correlation IDs threaded from intake
+  - ✅ Robust validation: decision status (fail-closed), instruction, plan path (traversal protection), derived task titles
+  - ✅ 13 passing tests covering all activation edge cases
 - **Task B**: enqueue tasks into the existing scheduler while preserving implement → review → spec-maintainer ordering and supporting additional `task_discovery` cycles mid-run.
 - **Task C**: ensure receipts/artifact metadata reflect intake origin (task titles, rationale, discovery id) for traceability.
 - **Exit criteria**: automated end-to-end test validates instruction → approval → implement/review/spec-maintainer completion with recorded traceability fields.
