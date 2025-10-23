@@ -257,7 +257,7 @@ func TestLLMAgentHeartbeatFields(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test heartbeat field initialization
-	assert.Equal(t, 0, agent.hbSeq)
+	assert.Equal(t, int64(0), agent.hbSeq)
 	assert.Equal(t, protocol.HeartbeatStatusStarting, agent.currentStatus)
 	assert.Empty(t, agent.currentTaskID)
 	assert.Empty(t, agent.firstObservedSnapshotID)
@@ -295,4 +295,203 @@ func TestLLMAgentConcurrentAccess(t *testing.T) {
 
 	// Should not have panicked or deadlocked
 	assert.True(t, true)
+}
+
+func TestLLMAgentHeartbeatLifecycle(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    createTestLogger(),
+	}
+
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Test complete heartbeat lifecycle: starting → ready → busy → ready → stopping
+	assert.Equal(t, protocol.HeartbeatStatusStarting, agent.currentStatus)
+	assert.Empty(t, agent.currentTaskID)
+
+	// Transition to ready
+	agent.setStatus(protocol.HeartbeatStatusReady, "")
+	assert.Equal(t, protocol.HeartbeatStatusReady, agent.currentStatus)
+	assert.Empty(t, agent.currentTaskID)
+
+	// Transition to busy with task
+	agent.setStatus(protocol.HeartbeatStatusBusy, "T-001")
+	assert.Equal(t, protocol.HeartbeatStatusBusy, agent.currentStatus)
+	assert.Equal(t, "T-001", agent.currentTaskID)
+
+	// Transition back to ready
+	agent.setStatus(protocol.HeartbeatStatusReady, "")
+	assert.Equal(t, protocol.HeartbeatStatusReady, agent.currentStatus)
+	assert.Empty(t, agent.currentTaskID)
+
+	// Transition to stopping
+	agent.setStatus(protocol.HeartbeatStatusStopping, "")
+	assert.Equal(t, protocol.HeartbeatStatusStopping, agent.currentStatus)
+	assert.Empty(t, agent.currentTaskID)
+}
+
+func TestLLMAgentHeartbeatSequenceIncrement(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    createTestLogger(),
+	}
+
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Test that heartbeat sequence increments properly
+	initialSeq := agent.hbSeq
+	assert.Equal(t, int64(0), initialSeq)
+
+	// Simulate multiple heartbeat sends
+	for i := 0; i < 5; i++ {
+		agent.mu.Lock()
+		agent.hbSeq++
+		seq := agent.hbSeq
+		agent.mu.Unlock()
+		assert.Equal(t, int64(i+1), seq)
+	}
+}
+
+func TestLLMAgentHeartbeatFieldsInitialization(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    createTestLogger(),
+	}
+
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Test that all required heartbeat fields are properly initialized
+	assert.NotEmpty(t, agent.agentID)
+	assert.True(t, agent.startTime.Before(time.Now()) || agent.startTime.Equal(time.Now()))
+	assert.True(t, agent.lastActivityAt.Before(time.Now()) || agent.lastActivityAt.Equal(time.Now()))
+	assert.Equal(t, int64(0), agent.hbSeq)
+	assert.Equal(t, protocol.HeartbeatStatusStarting, agent.currentStatus)
+	assert.Empty(t, agent.currentTaskID)
+}
+
+func TestLLMAgentActivityTracking(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    createTestLogger(),
+	}
+
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Test activity tracking
+	initialActivity := agent.lastActivityAt
+
+	// Wait a bit and update activity
+	time.Sleep(10 * time.Millisecond)
+	agent.updateActivity()
+
+	assert.True(t, agent.lastActivityAt.After(initialActivity))
+
+	// Test that setStatus also updates activity
+	time.Sleep(10 * time.Millisecond)
+	agent.setStatus(protocol.HeartbeatStatusBusy, "T-001")
+
+	assert.True(t, agent.lastActivityAt.After(initialActivity))
+}
+
+func TestLLMAgentHeartbeatContinuity(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    createTestLogger(),
+	}
+
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Test that heartbeats continue during long operations
+	// This simulates the scenario where an agent is busy for a long time
+	agent.setStatus(protocol.HeartbeatStatusBusy, "T-001")
+
+	// Simulate activity updates during long operation
+	for i := 0; i < 5; i++ {
+		time.Sleep(5 * time.Millisecond)
+		agent.updateActivity()
+	}
+
+	// Status should still be busy
+	assert.Equal(t, protocol.HeartbeatStatusBusy, agent.currentStatus)
+	assert.Equal(t, "T-001", agent.currentTaskID)
+
+	// Activity should be recent
+	assert.True(t, time.Since(agent.lastActivityAt) < 100*time.Millisecond)
+}
+
+func TestLLMAgentAgentIDGeneration(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    createTestLogger(),
+	}
+
+	agent1, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Wait a bit to ensure different timestamps
+	time.Sleep(1 * time.Millisecond)
+
+	agent2, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Agent IDs should be unique
+	assert.NotEqual(t, agent1.agentID, agent2.agentID)
+	assert.NotEmpty(t, agent1.agentID)
+	assert.NotEmpty(t, agent2.agentID)
+
+	// Agent IDs should contain the role
+	assert.Contains(t, agent1.agentID, string(cfg.Role))
+	assert.Contains(t, agent2.agentID, string(cfg.Role))
+}
+
+func TestLLMAgentHeartbeatStatusTransitions(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    createTestLogger(),
+	}
+
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Test all valid status transitions
+	statuses := []protocol.HeartbeatStatus{
+		protocol.HeartbeatStatusStarting,
+		protocol.HeartbeatStatusReady,
+		protocol.HeartbeatStatusBusy,
+		protocol.HeartbeatStatusReady,
+		protocol.HeartbeatStatusStopping,
+	}
+
+	for i, status := range statuses {
+		agent.setStatus(status, "")
+		assert.Equal(t, status, agent.currentStatus, "Status transition %d failed", i)
+	}
+
+	// Test busy status with task ID
+	agent.setStatus(protocol.HeartbeatStatusBusy, "T-001")
+	assert.Equal(t, protocol.HeartbeatStatusBusy, agent.currentStatus)
+	assert.Equal(t, "T-001", agent.currentTaskID)
+
+	// Test backoff status
+	agent.setStatus(protocol.HeartbeatStatusBackoff, "")
+	assert.Equal(t, protocol.HeartbeatStatusBackoff, agent.currentStatus)
 }

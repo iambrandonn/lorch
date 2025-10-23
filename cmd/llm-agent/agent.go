@@ -29,10 +29,11 @@ type LLMAgent struct {
 
 	// Heartbeat fields
 	startTime              time.Time
-	hbSeq                  int
+	hbSeq                  int64
 	currentStatus          protocol.HeartbeatStatus
 	currentTaskID          string
 	lastActivityAt         time.Time
+	agentID                string
 	mu                     sync.Mutex
 
 	// Version tracking
@@ -47,6 +48,9 @@ func NewLLMAgent(cfg *AgentConfig) (*LLMAgent, error) {
 	receiptStore := NewRealReceiptStore(cfg.Workspace)
 	fsProvider := NewRealFSProvider(cfg.Workspace)
 
+	// Generate unique agent ID
+	agentID := fmt.Sprintf("%s-%d", string(cfg.Role), time.Now().UnixNano())
+
 	agent := &LLMAgent{
 		config:       *cfg,
 		llmCaller:    llmCaller,
@@ -55,6 +59,7 @@ func NewLLMAgent(cfg *AgentConfig) (*LLMAgent, error) {
 		startTime:    time.Now(),
 		lastActivityAt: time.Now(),
 		currentStatus: protocol.HeartbeatStatusStarting,
+		agentID:      agentID,
 	}
 
 	// Create event emitter (will be set up in Run method with encoder)
@@ -68,7 +73,12 @@ func (a *LLMAgent) Run(ctx context.Context, stdin io.Reader, stdout, stderr io.W
 	a.decoder = ndjson.NewDecoder(stdin, a.config.Logger)
 
 	// Create event emitter with encoder
-	a.eventEmitter = NewRealEventEmitter(a.encoder, a.config.Logger)
+	a.eventEmitter = NewRealEventEmitter(a.encoder, a.config.Logger, a.config.Role, a.agentID)
+
+	// Initialize heartbeat timers before first emission
+	a.startTime = time.Now()
+	a.lastActivityAt = time.Now()
+	a.currentStatus = protocol.HeartbeatStatusStarting
 
 	// Start heartbeat goroutine
 	go a.heartbeatLoop(ctx)
@@ -113,6 +123,9 @@ func (a *LLMAgent) Run(ctx context.Context, stdin io.Reader, stdout, stderr io.W
 // handleCommand routes commands to appropriate handlers
 func (a *LLMAgent) handleCommand(cmd *protocol.Command) error {
 	a.config.Logger.Info("handling command", "action", cmd.Action, "task_id", cmd.TaskID)
+
+	// Update activity timestamp
+	a.updateActivity()
 
 	// Version mismatch detection
 	a.mu.Lock()
@@ -217,7 +230,10 @@ func (a *LLMAgent) heartbeatLoop(ctx context.Context) {
 			taskID := a.currentTaskID
 			a.mu.Unlock()
 
-			a.sendHeartbeat(status, taskID)
+			// Send heartbeat (errors are logged but don't stop the loop)
+			if err := a.sendHeartbeat(status, taskID); err != nil {
+				a.config.Logger.Error("failed to send heartbeat", "error", err)
+			}
 		case <-ctx.Done():
 			return
 		}
@@ -229,20 +245,21 @@ func (a *LLMAgent) sendHeartbeat(status protocol.HeartbeatStatus, taskID string)
 	a.mu.Lock()
 	a.hbSeq++
 	seq := a.hbSeq
+	lastActivityAt := a.lastActivityAt
 	a.mu.Unlock()
 
 	hb := protocol.Heartbeat{
 		Kind: protocol.MessageKindHeartbeat,
 		Agent: protocol.AgentRef{
 			AgentType: a.config.Role,
-			AgentID:  "agent-1", // TODO: Generate unique agent ID
+			AgentID:   a.agentID,
 		},
-		Seq:            int64(seq),
+		Seq:            seq,
 		Status:         status,
 		PID:            os.Getpid(),
 		PPID:           os.Getppid(),
 		UptimeS:        time.Since(a.startTime).Seconds(),
-		LastActivityAt: a.lastActivityAt,
+		LastActivityAt: lastActivityAt,
 		TaskID:         taskID,
 		// Stats optional - can add CPU/memory monitoring
 	}

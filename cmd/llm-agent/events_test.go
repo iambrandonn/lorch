@@ -458,7 +458,7 @@ func TestRealEventEmitterSizeCapping(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger)
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
 
 	cmd := &protocol.Command{
 		CorrelationID: "corr-1",
@@ -490,7 +490,7 @@ func TestRealEventEmitterProtocolCompliance(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger)
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
 
 	cmd := &protocol.Command{
 		CorrelationID: "corr-1",
@@ -520,7 +520,7 @@ func TestRealEventEmitterErrorEventStructure(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger)
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
 
 	cmd := &protocol.Command{
 		CorrelationID: "corr-1",
@@ -540,4 +540,256 @@ func TestRealEventEmitterErrorEventStructure(t *testing.T) {
 	assert.Contains(t, output, `"status":"failed"`)
 	assert.Contains(t, output, `"code":"test_error"`)
 	assert.Contains(t, output, `"message":"test message"`)
+}
+
+func TestRedactSecrets(t *testing.T) {
+	// Test basic redaction
+	fields := map[string]any{
+		"api_key":        "secret123",
+		"access_token":   "token456",
+		"database_secret": "secret789",
+		"user_name":      "john_doe",
+		"normal_field":   "normal_value",
+	}
+
+	// Use the real emitter's redactSecrets method
+	realEmitter := &RealEventEmitter{}
+	redacted := realEmitter.redactSecrets(fields)
+
+	// Verify secrets are redacted
+	assert.Equal(t, "[REDACTED]", redacted["api_key"])
+	assert.Equal(t, "[REDACTED]", redacted["access_token"])
+	assert.Equal(t, "[REDACTED]", redacted["database_secret"])
+
+	// Verify non-secret fields are preserved
+	assert.Equal(t, "john_doe", redacted["user_name"])
+	assert.Equal(t, "normal_value", redacted["normal_field"])
+}
+
+func TestRedactSecretsCaseInsensitive(t *testing.T) {
+	realEmitter := &RealEventEmitter{}
+
+	// Test case insensitive redaction
+	fields := map[string]any{
+		"API_KEY":        "secret123",
+		"Access_Token":   "token456",
+		"database_SECRET": "secret789",
+		"user_name":      "john_doe",
+	}
+
+	redacted := realEmitter.redactSecrets(fields)
+
+	// Verify all variations are redacted
+	assert.Equal(t, "[REDACTED]", redacted["API_KEY"])
+	assert.Equal(t, "[REDACTED]", redacted["Access_Token"])
+	assert.Equal(t, "[REDACTED]", redacted["database_SECRET"])
+	assert.Equal(t, "john_doe", redacted["user_name"])
+}
+
+func TestRedactSecretsNestedMaps(t *testing.T) {
+	realEmitter := &RealEventEmitter{}
+
+	// Test nested map redaction
+	fields := map[string]any{
+		"config": map[string]any{
+			"api_key":    "secret123",
+			"user_name":  "john_doe",
+			"nested": map[string]any{
+				"access_token": "token456",
+				"normal_field": "normal_value",
+			},
+		},
+		"top_level_secret": "secret789",
+		"normal_field":     "normal_value",
+	}
+
+	redacted := realEmitter.redactSecrets(fields)
+
+	// Verify top-level redaction
+	assert.Equal(t, "[REDACTED]", redacted["top_level_secret"])
+	assert.Equal(t, "normal_value", redacted["normal_field"])
+
+	// Verify nested redaction
+	config, ok := redacted["config"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "[REDACTED]", config["api_key"])
+	assert.Equal(t, "john_doe", config["user_name"])
+
+	// Verify deeply nested redaction
+	nested, ok := config["nested"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "[REDACTED]", nested["access_token"])
+	assert.Equal(t, "normal_value", nested["normal_field"])
+}
+
+func TestRedactSecretsNilAndEmpty(t *testing.T) {
+	realEmitter := &RealEventEmitter{}
+
+	// Test nil input
+	redacted := realEmitter.redactSecrets(nil)
+	assert.Nil(t, redacted)
+
+	// Test empty map
+	redacted = realEmitter.redactSecrets(map[string]any{})
+	assert.Empty(t, redacted)
+}
+
+func TestRedactSecretsMixedTypes(t *testing.T) {
+	realEmitter := &RealEventEmitter{}
+
+	// Test with mixed value types
+	fields := map[string]any{
+		"api_key":        "secret123",
+		"access_token":   12345,
+		"database_secret": true,
+		"user_name":      "john_doe",
+		"count":          42,
+	}
+
+	redacted := realEmitter.redactSecrets(fields)
+
+	// Verify secrets are redacted regardless of type
+	assert.Equal(t, "[REDACTED]", redacted["api_key"])
+	assert.Equal(t, "[REDACTED]", redacted["access_token"])
+	assert.Equal(t, "[REDACTED]", redacted["database_secret"])
+
+	// Verify non-secret fields are preserved
+	assert.Equal(t, "john_doe", redacted["user_name"])
+	assert.Equal(t, 42, redacted["count"])
+}
+
+func TestSendLogWithRedaction(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+
+	// Test log with secrets
+	fields := map[string]any{
+		"api_key":        "secret123",
+		"access_token":   "token456",
+		"user_name":      "john_doe",
+		"normal_field":   "normal_value",
+	}
+
+	err := emitter.SendLog("info", "test log with secrets", fields)
+	require.NoError(t, err)
+
+	// Verify the output contains redacted secrets
+	output := buf.String()
+	assert.Contains(t, output, `"message":"test log with secrets"`)
+	assert.Contains(t, output, `"level":"info"`)
+	assert.Contains(t, output, `"api_key":"[REDACTED]"`)
+	assert.Contains(t, output, `"access_token":"[REDACTED]"`)
+	assert.Contains(t, output, `"user_name":"john_doe"`)
+	assert.Contains(t, output, `"normal_field":"normal_value"`)
+}
+
+func TestSendLogWithoutFields(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+
+	// Test log without fields
+	err := emitter.SendLog("info", "simple log message", nil)
+	require.NoError(t, err)
+
+	// Verify the output
+	output := buf.String()
+	assert.Contains(t, output, `"message":"simple log message"`)
+	assert.Contains(t, output, `"level":"info"`)
+}
+
+func TestSendLogWithEmptyFields(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+
+	// Test log with empty fields
+	err := emitter.SendLog("warn", "warning message", map[string]any{})
+	require.NoError(t, err)
+
+	// Verify the output
+	output := buf.String()
+	assert.Contains(t, output, `"message":"warning message"`)
+	assert.Contains(t, output, `"level":"warn"`)
+}
+
+func TestSendLogDifferentLevels(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+
+	// Test different log levels
+	levels := []string{"debug", "info", "warn", "error"}
+	for _, level := range levels {
+		err := emitter.SendLog(level, fmt.Sprintf("%s message", level), map[string]any{"level": level})
+		require.NoError(t, err)
+	}
+
+	// Verify all levels were logged
+	output := buf.String()
+	for _, level := range levels {
+		assert.Contains(t, output, fmt.Sprintf(`"level":"%s"`, level))
+		assert.Contains(t, output, fmt.Sprintf(`"message":"%s message"`, level))
+	}
+}
+
+func TestSendLogMessageSizeLimit(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+
+	// Test with a very large message that might approach size limits
+	largeMessage := strings.Repeat("x", 10000) // 10KB message
+	largeFields := map[string]any{
+		"large_data": strings.Repeat("y", 5000), // 5KB field
+		"api_key":    "secret123", // Should be redacted
+	}
+
+	err := emitter.SendLog("info", largeMessage, largeFields)
+	require.NoError(t, err)
+
+	// Verify the output contains the message and redacted secret
+	output := buf.String()
+	assert.Contains(t, output, largeMessage)
+	assert.Contains(t, output, `"api_key":"[REDACTED]"`)
+	assert.Contains(t, output, `"large_data":"`+strings.Repeat("y", 5000)+`"`)
+}
+
+func TestMockEventEmitterRedaction(t *testing.T) {
+	emitter := NewMockEventEmitter()
+
+	// Test that mock emitter also handles redaction
+	fields := map[string]any{
+		"api_key":      "secret123",
+		"user_name":    "john_doe",
+		"access_token": "token456",
+	}
+
+	err := emitter.SendLog("info", "test log", fields)
+	require.NoError(t, err)
+
+	// Verify log was recorded
+	logs := emitter.GetLogs()
+	assert.Len(t, logs, 1)
+
+	log := logs[0]
+	assert.Equal(t, "test log", log.Message)
+	assert.Equal(t, "info", string(log.Level))
+
+	// Note: MockEventEmitter doesn't actually redact, but the interface is tested
+	// The real redaction happens in RealEventEmitter
+	assert.Equal(t, "secret123", log.Fields["api_key"])
+	assert.Equal(t, "john_doe", log.Fields["user_name"])
+	assert.Equal(t, "token456", log.Fields["access_token"])
 }

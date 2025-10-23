@@ -14,15 +14,19 @@ import (
 
 // RealEventEmitter implements EventEmitter using real NDJSON encoding
 type RealEventEmitter struct {
-	encoder *ndjson.Encoder
-	logger  *slog.Logger
+	encoder  *ndjson.Encoder
+	logger   *slog.Logger
+	agentType protocol.AgentType
+	agentID  string
 }
 
 // NewRealEventEmitter creates a new real event emitter
-func NewRealEventEmitter(encoder *ndjson.Encoder, logger *slog.Logger) *RealEventEmitter {
+func NewRealEventEmitter(encoder *ndjson.Encoder, logger *slog.Logger, agentType protocol.AgentType, agentID string) *RealEventEmitter {
 	return &RealEventEmitter{
-		encoder: encoder,
-		logger:  logger,
+		encoder:   encoder,
+		logger:    logger,
+		agentType: agentType,
+		agentID:   agentID,
 	}
 }
 
@@ -34,8 +38,8 @@ func (e *RealEventEmitter) NewEvent(cmd *protocol.Command, eventName string) pro
 		CorrelationID: cmd.CorrelationID,
 		TaskID:        cmd.TaskID,
 		From: protocol.AgentRef{
-			AgentType: protocol.AgentTypeOrchestration, // TODO: Get from agent config
-			AgentID:   "agent-1",                      // TODO: Get from agent config
+			AgentType: e.agentType,
+			AgentID:   e.agentID,
 		},
 		Event: eventName,
 		ObservedVersion: &protocol.Version{
