@@ -73,7 +73,7 @@ func (a *LLMAgent) Run(ctx context.Context, stdin io.Reader, stdout, stderr io.W
 	a.decoder = ndjson.NewDecoder(stdin, a.config.Logger)
 
 	// Create event emitter with encoder
-	a.eventEmitter = NewRealEventEmitter(a.encoder, a.config.Logger, a.config.Role, a.agentID)
+	a.eventEmitter = NewRealEventEmitter(a.encoder, a.config.Logger, a.config.Role, a.agentID, a.config.MaxMessageBytes)
 
 	// Initialize heartbeat timers before first emission
 	a.startTime = time.Now()

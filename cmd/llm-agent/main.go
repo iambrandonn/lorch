@@ -49,6 +49,7 @@ func main() {
 		LLMCLI:    *llmCLI,
 		Workspace: *workspace,
 		Logger:    logger,
+		MaxMessageBytes: 256 * 1024, // 256 KiB default (Spec §12)
 	}
 
 	// Create agent

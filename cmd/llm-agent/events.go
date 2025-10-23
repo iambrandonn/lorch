@@ -18,15 +18,20 @@ type RealEventEmitter struct {
 	logger   *slog.Logger
 	agentType protocol.AgentType
 	agentID  string
+	maxMessageBytes int
 }
 
 // NewRealEventEmitter creates a new real event emitter
-func NewRealEventEmitter(encoder *ndjson.Encoder, logger *slog.Logger, agentType protocol.AgentType, agentID string) *RealEventEmitter {
+func NewRealEventEmitter(encoder *ndjson.Encoder, logger *slog.Logger, agentType protocol.AgentType, agentID string, maxMessageBytes int) *RealEventEmitter {
+	if maxMessageBytes <= 0 {
+		maxMessageBytes = 256 * 1024 // 256 KiB default (Spec §12)
+	}
 	return &RealEventEmitter{
 		encoder:   encoder,
 		logger:    logger,
 		agentType: agentType,
 		agentID:   agentID,
+		maxMessageBytes: maxMessageBytes,
 	}
 }
 
@@ -51,27 +56,205 @@ func (e *RealEventEmitter) NewEvent(cmd *protocol.Command, eventName string) pro
 
 // EncodeEventCapped marshals and emits an event, enforcing the NDJSON message size cap
 func (e *RealEventEmitter) EncodeEventCapped(evt protocol.Event) error {
-	maxSize := 256 * 1024 // 256 KiB default (Spec §12)
-
 	b, err := json.Marshal(evt)
 	if err != nil {
 		return err
 	}
-	if len(b) <= maxSize {
+	if len(b) <= e.maxMessageBytes {
 		return e.encoder.Encode(evt)
 	}
 
+	// Apply deterministic truncation strategy based on event type
+	truncatedPayload := e.truncatePayloadDeterministically(evt.Event, evt.Payload)
+	evt.Payload = truncatedPayload
+	return e.encoder.Encode(evt)
+}
+
+
+// truncatePayloadDeterministically applies event-specific truncation strategies
+func (e *RealEventEmitter) truncatePayloadDeterministically(eventName string, payload map[string]any) map[string]any {
+	switch eventName {
+	case "orchestration.proposed_tasks":
+		return e.truncateOrchestrationProposedTasks(payload)
+	case "orchestration.needs_clarification":
+		return e.truncateOrchestrationNeedsClarification(payload)
+	case "orchestration.plan_conflict":
+		return e.truncateOrchestrationPlanConflict(payload)
+	default:
+		return e.truncateGenericPayload(payload)
+	}
+}
+
+// truncateOrchestrationProposedTasks truncates orchestration.proposed_tasks payload deterministically
+func (e *RealEventEmitter) truncateOrchestrationProposedTasks(payload map[string]any) map[string]any {
+	result := make(map[string]any)
+
+	// Preserve notes (usually small and important)
+	if notes, ok := payload["notes"].(string); ok {
+		result["notes"] = notes
+	}
+
+	// Truncate plan_candidates deterministically (keep top candidates by confidence)
+	if candidates, ok := payload["plan_candidates"].([]map[string]any); ok {
+		// Sort by confidence (descending) to keep the most important ones
+		sortedCandidates := e.sortCandidatesByConfidence(candidates)
+		// Keep top 3 candidates or until we hit size limit
+		truncatedCandidates := e.truncateCandidatesList(sortedCandidates, e.maxMessageBytes/4)
+		result["plan_candidates"] = truncatedCandidates
+		result["plan_candidates_truncated"] = len(candidates) > len(truncatedCandidates)
+	}
+
+	// Truncate derived_tasks deterministically (keep by ID order)
+	if tasks, ok := payload["derived_tasks"].([]map[string]any); ok {
+		// Sort by ID to ensure deterministic order
+		sortedTasks := e.sortTasksByID(tasks)
+		// Keep top 5 tasks or until we hit size limit
+		truncatedTasks := e.truncateTasksList(sortedTasks, e.maxMessageBytes/4)
+		result["derived_tasks"] = truncatedTasks
+		result["derived_tasks_truncated"] = len(tasks) > len(truncatedTasks)
+	}
+
+	// Add truncation summary
+	result["_truncated"] = "Event payload truncated due to size limits. Check plan_candidates_truncated and derived_tasks_truncated flags."
+
+	return result
+}
+
+// truncateOrchestrationNeedsClarification truncates orchestration.needs_clarification payload
+func (e *RealEventEmitter) truncateOrchestrationNeedsClarification(payload map[string]any) map[string]any {
+	result := make(map[string]any)
+
+	// Preserve notes (usually small and important)
+	if notes, ok := payload["notes"].(string); ok {
+		result["notes"] = notes
+	}
+
+	// Truncate questions list (keep first few questions)
+	if questions, ok := payload["questions"].([]string); ok {
+		maxQuestions := 3 // Keep first 3 questions
+		if len(questions) > maxQuestions {
+			result["questions"] = questions[:maxQuestions]
+			result["questions_truncated"] = true
+			result["total_questions"] = len(questions)
+		} else {
+			result["questions"] = questions
+		}
+	}
+
+	result["_truncated"] = "Questions list truncated due to size limits."
+	return result
+}
+
+// truncateOrchestrationPlanConflict truncates orchestration.plan_conflict payload
+func (e *RealEventEmitter) truncateOrchestrationPlanConflict(payload map[string]any) map[string]any {
+	result := make(map[string]any)
+
+	// Preserve reason (usually small and important)
+	if reason, ok := payload["reason"].(string); ok {
+		result["reason"] = reason
+	}
+
+	// Truncate candidates list (keep top candidates by confidence)
+	if candidates, ok := payload["candidates"].([]map[string]any); ok {
+		sortedCandidates := e.sortCandidatesByConfidence(candidates)
+		truncatedCandidates := e.truncateCandidatesList(sortedCandidates, e.maxMessageBytes/3)
+		result["candidates"] = truncatedCandidates
+		result["candidates_truncated"] = len(candidates) > len(truncatedCandidates)
+	}
+
+	result["_truncated"] = "Candidates list truncated due to size limits."
+	return result
+}
+
+// truncateGenericPayload provides fallback truncation for non-orchestration events
+func (e *RealEventEmitter) truncateGenericPayload(payload map[string]any) map[string]any {
 	// Fallback: stringify payload preview under "_truncated" and clear original payload
 	preview := ""
-	if pb, err := json.Marshal(evt.Payload); err == nil {
-		if len(pb) > 2048 {
-			preview = string(pb[:2048]) + "…"
+	if pb, err := json.Marshal(payload); err == nil {
+		// Limit preview to 25% of max message size or 2KB, whichever is smaller
+		maxPreviewSize := e.maxMessageBytes / 4
+		if maxPreviewSize > 2048 {
+			maxPreviewSize = 2048
+		}
+		if len(pb) > maxPreviewSize {
+			preview = string(pb[:maxPreviewSize]) + "…"
 		} else {
 			preview = string(pb)
 		}
 	}
-	evt.Payload = map[string]any{"_truncated": preview}
-	return e.encoder.Encode(evt)
+	return map[string]any{"_truncated": preview}
+}
+
+// sortCandidatesByConfidence sorts candidates by confidence (descending)
+func (e *RealEventEmitter) sortCandidatesByConfidence(candidates []map[string]any) []map[string]any {
+	// Create a copy to avoid modifying the original
+	sorted := make([]map[string]any, len(candidates))
+	copy(sorted, candidates)
+
+	// Simple bubble sort by confidence (descending)
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := 0; j < len(sorted)-i-1; j++ {
+			conf1, _ := sorted[j]["confidence"].(float64)
+			conf2, _ := sorted[j+1]["confidence"].(float64)
+			if conf1 < conf2 {
+				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
+			}
+		}
+	}
+	return sorted
+}
+
+// sortTasksByID sorts tasks by ID (ascending)
+func (e *RealEventEmitter) sortTasksByID(tasks []map[string]any) []map[string]any {
+	// Create a copy to avoid modifying the original
+	sorted := make([]map[string]any, len(tasks))
+	copy(sorted, tasks)
+
+	// Simple bubble sort by ID (ascending)
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := 0; j < len(sorted)-i-1; j++ {
+			id1, _ := sorted[j]["id"].(string)
+			id2, _ := sorted[j+1]["id"].(string)
+			if id1 > id2 {
+				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
+			}
+		}
+	}
+	return sorted
+}
+
+// truncateCandidatesList truncates candidates list to fit within size limit
+func (e *RealEventEmitter) truncateCandidatesList(candidates []map[string]any, maxSize int) []map[string]any {
+	var result []map[string]any
+	currentSize := 0
+
+	for _, candidate := range candidates {
+		candidateBytes, _ := json.Marshal(candidate)
+		if currentSize+len(candidateBytes) > maxSize && len(result) > 0 {
+			break
+		}
+		result = append(result, candidate)
+		currentSize += len(candidateBytes)
+	}
+
+	return result
+}
+
+// truncateTasksList truncates tasks list to fit within size limit
+func (e *RealEventEmitter) truncateTasksList(tasks []map[string]any, maxSize int) []map[string]any {
+	var result []map[string]any
+	currentSize := 0
+
+	for _, task := range tasks {
+		taskBytes, _ := json.Marshal(task)
+		if currentSize+len(taskBytes) > maxSize && len(result) > 0 {
+			break
+		}
+		result = append(result, task)
+		currentSize += len(taskBytes)
+	}
+
+	return result
 }
 
 // SendErrorEvent sends a structured error event with machine-readable error codes

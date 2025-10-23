@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -458,7 +459,7 @@ func TestRealEventEmitterSizeCapping(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	cmd := &protocol.Command{
 		CorrelationID: "corr-1",
@@ -490,7 +491,7 @@ func TestRealEventEmitterProtocolCompliance(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	cmd := &protocol.Command{
 		CorrelationID: "corr-1",
@@ -520,7 +521,7 @@ func TestRealEventEmitterErrorEventStructure(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	cmd := &protocol.Command{
 		CorrelationID: "corr-1",
@@ -663,7 +664,7 @@ func TestSendLogWithRedaction(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	// Test log with secrets
 	fields := map[string]any{
@@ -691,7 +692,7 @@ func TestSendLogWithoutFields(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	// Test log without fields
 	err := emitter.SendLog("info", "simple log message", nil)
@@ -708,7 +709,7 @@ func TestSendLogWithEmptyFields(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	// Test log with empty fields
 	err := emitter.SendLog("warn", "warning message", map[string]any{})
@@ -725,7 +726,7 @@ func TestSendLogDifferentLevels(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	// Test different log levels
 	levels := []string{"debug", "info", "warn", "error"}
@@ -747,7 +748,7 @@ func TestSendLogMessageSizeLimit(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	// Test with a very large message that might approach size limits
 	largeMessage := strings.Repeat("x", 10000) // 10KB message
@@ -928,7 +929,7 @@ func TestRealEventEmitterArtifactProducedEvent(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	cmd := &protocol.Command{
 		CorrelationID: "corr-1",
@@ -963,7 +964,7 @@ func TestRealEventEmitterArtifactProducedEventProtocolCompliance(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
 	encoder := ndjson.NewEncoder(&buf, logger)
 
-	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 256*1024)
 
 	cmd := &protocol.Command{
 		CorrelationID: "corr-1",
@@ -996,3 +997,435 @@ func TestRealEventEmitterArtifactProducedEventProtocolCompliance(t *testing.T) {
 	assert.Contains(t, output, `"observed_version":{"snapshot_id":"snap-1"}`)
 	assert.Contains(t, output, `"artifacts":[{"path":"test/artifact.txt","sha256":"sha256:abc123def456","size":1024}]`)
 }
+
+func TestRealEventEmitterSizeCappingWithDifferentLimits(t *testing.T) {
+	testCases := []struct {
+		name           string
+		maxBytes       int
+		payloadSize    int
+		shouldTruncate bool
+	}{
+		{
+			name:           "Small payload under limit",
+			maxBytes:       1024,
+			payloadSize:    500,
+			shouldTruncate: false,
+		},
+		{
+			name:           "Payload exactly at limit",
+			maxBytes:       1024,
+			payloadSize:    600, // Leave room for JSON overhead
+			shouldTruncate: false,
+		},
+		{
+			name:           "Payload slightly over limit",
+			maxBytes:       1024,
+			payloadSize:    1200,
+			shouldTruncate: true,
+		},
+		{
+			name:           "Large payload with small limit",
+			maxBytes:       512,
+			payloadSize:    2000,
+			shouldTruncate: true,
+		},
+		{
+			name:           "Very large payload with default limit",
+			maxBytes:       256 * 1024,
+			payloadSize:    300 * 1024,
+			shouldTruncate: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf strings.Builder
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+			encoder := ndjson.NewEncoder(&buf, logger)
+
+			emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", tc.maxBytes)
+
+			cmd := &protocol.Command{
+				CorrelationID: "corr-1",
+				TaskID:        "T-001",
+				Version: protocol.Version{
+					SnapshotID: "snap-1",
+				},
+			}
+
+			// Create a payload of the specified size
+			largePayload := make(map[string]any)
+			largePayload["data"] = strings.Repeat("x", tc.payloadSize)
+
+			evt := emitter.NewEvent(cmd, "test.large_event")
+			evt.Payload = largePayload
+
+			err := emitter.EncodeEventCapped(evt)
+			require.NoError(t, err)
+
+			output := buf.String()
+
+			if tc.shouldTruncate {
+				assert.Contains(t, output, "_truncated")
+				assert.NotContains(t, output, strings.Repeat("x", tc.payloadSize))
+			} else {
+				assert.NotContains(t, output, "_truncated")
+				assert.Contains(t, output, strings.Repeat("x", tc.payloadSize))
+			}
+		})
+	}
+}
+
+func TestRealEventEmitterPreviewSizeCalculation(t *testing.T) {
+	testCases := []struct {
+		name           string
+		maxBytes       int
+		expectedMaxPreview int
+	}{
+		{
+			name:           "Small limit",
+			maxBytes:       1024,
+			expectedMaxPreview: 256, // 25% of 1024
+		},
+		{
+			name:           "Medium limit",
+			maxBytes:       8192,
+			expectedMaxPreview: 2048, // 25% of 8192, but capped at 2048
+		},
+		{
+			name:           "Large limit",
+			maxBytes:       256 * 1024,
+			expectedMaxPreview: 2048, // 25% would be 64KB, but capped at 2048
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf strings.Builder
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+			encoder := ndjson.NewEncoder(&buf, logger)
+
+			emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", tc.maxBytes)
+
+			cmd := &protocol.Command{
+				CorrelationID: "corr-1",
+				TaskID:        "T-001",
+				Version: protocol.Version{
+					SnapshotID: "snap-1",
+				},
+			}
+
+			// Create a payload that will definitely be truncated
+			largePayload := make(map[string]any)
+			largePayload["data"] = strings.Repeat("x", tc.maxBytes*2) // Double the limit
+
+			evt := emitter.NewEvent(cmd, "test.large_event")
+			evt.Payload = largePayload
+
+			err := emitter.EncodeEventCapped(evt)
+			require.NoError(t, err)
+
+			output := buf.String()
+			assert.Contains(t, output, "_truncated")
+
+			// Extract the truncated content and verify its size
+			var result map[string]any
+			err = json.Unmarshal([]byte(output), &result)
+			require.NoError(t, err)
+
+			truncated, ok := result["payload"].(map[string]any)["_truncated"].(string)
+			require.True(t, ok)
+
+			// The preview should not exceed the expected max preview size (with some tolerance for JSON escaping)
+			assert.LessOrEqual(t, len(truncated), tc.expectedMaxPreview+10) // +10 for JSON escaping and ellipsis
+		})
+	}
+}
+
+func TestRealEventEmitterZeroMaxBytes(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	// Test with zero max bytes (should use default)
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 0)
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Create a payload that's under the default limit
+	smallPayload := make(map[string]any)
+	smallPayload["data"] = "small data"
+
+	evt := emitter.NewEvent(cmd, "test.small_event")
+	evt.Payload = smallPayload
+
+	err := emitter.EncodeEventCapped(evt)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.NotContains(t, output, "_truncated")
+	assert.Contains(t, output, "small data")
+}
+
+func TestRealEventEmitterNegativeMaxBytes(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	// Test with negative max bytes (should use default)
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", -100)
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Create a payload that's under the default limit
+	smallPayload := make(map[string]any)
+	smallPayload["data"] = "small data"
+
+	evt := emitter.NewEvent(cmd, "test.small_event")
+	evt.Payload = smallPayload
+
+	err := emitter.EncodeEventCapped(evt)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.NotContains(t, output, "_truncated")
+	assert.Contains(t, output, "small data")
+}
+
+func TestRealEventEmitterDeterministicTruncationOrchestrationProposedTasks(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	// Use a small limit to force truncation
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 1024)
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Create a large orchestration.proposed_tasks payload
+	planCandidates := []map[string]any{
+		{"path": "PLAN.md", "confidence": 0.9, "content": strings.Repeat("x", 200)},
+		{"path": "docs/plan_v2.md", "confidence": 0.7, "content": strings.Repeat("y", 200)},
+		{"path": "docs/plan_v3.md", "confidence": 0.5, "content": strings.Repeat("z", 200)},
+		{"path": "docs/plan_v4.md", "confidence": 0.3, "content": strings.Repeat("w", 200)},
+	}
+
+	derivedTasks := []map[string]any{
+		{"id": "T-001-1", "title": "Task 1", "files": []string{"src/a.js"}, "content": strings.Repeat("a", 100)},
+		{"id": "T-001-2", "title": "Task 2", "files": []string{"src/b.js"}, "content": strings.Repeat("b", 100)},
+		{"id": "T-001-3", "title": "Task 3", "files": []string{"src/c.js"}, "content": strings.Repeat("c", 100)},
+		{"id": "T-001-4", "title": "Task 4", "files": []string{"src/d.js"}, "content": strings.Repeat("d", 100)},
+	}
+
+	notes := "Found multiple plan candidates and derived tasks"
+
+	err := emitter.SendOrchestrationProposedTasksEvent(cmd, planCandidates, derivedTasks, notes)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "_truncated")
+
+	// Parse the output to verify deterministic truncation
+	var result map[string]any
+	err = json.Unmarshal([]byte(output), &result)
+	require.NoError(t, err)
+
+	payload := result["payload"].(map[string]any)
+
+	// Notes should be preserved
+	assert.Equal(t, notes, payload["notes"])
+
+	// Should have truncation flags
+	assert.Contains(t, payload, "plan_candidates_truncated")
+	assert.Contains(t, payload, "derived_tasks_truncated")
+
+	// Should have truncated lists
+	candidates := payload["plan_candidates"].([]any)
+	tasks := payload["derived_tasks"].([]any)
+
+	// Should have fewer items than original
+	assert.Less(t, len(candidates), len(planCandidates))
+	assert.Less(t, len(tasks), len(derivedTasks))
+
+	// Should be sorted deterministically (candidates by confidence, tasks by ID)
+	if len(candidates) > 1 {
+		// Verify candidates are sorted by confidence (descending)
+		firstConf, _ := candidates[0].(map[string]any)["confidence"].(float64)
+		secondConf, _ := candidates[1].(map[string]any)["confidence"].(float64)
+		assert.GreaterOrEqual(t, firstConf, secondConf)
+	}
+
+	if len(tasks) > 1 {
+		// Verify tasks are sorted by ID (ascending)
+		firstID, _ := tasks[0].(map[string]any)["id"].(string)
+		secondID, _ := tasks[1].(map[string]any)["id"].(string)
+		assert.LessOrEqual(t, firstID, secondID)
+	}
+}
+
+func TestRealEventEmitterDeterministicTruncationOrchestrationNeedsClarification(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 512)
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Create a large needs clarification payload
+	questions := []string{
+		"Question 1: " + strings.Repeat("x", 100),
+		"Question 2: " + strings.Repeat("y", 100),
+		"Question 3: " + strings.Repeat("z", 100),
+		"Question 4: " + strings.Repeat("w", 100),
+		"Question 5: " + strings.Repeat("v", 100),
+	}
+	notes := "Multiple questions for clarification"
+
+	err := emitter.SendOrchestrationNeedsClarificationEvent(cmd, questions, notes)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "_truncated")
+
+	// Parse the output
+	var result map[string]any
+	err = json.Unmarshal([]byte(output), &result)
+	require.NoError(t, err)
+
+	payload := result["payload"].(map[string]any)
+
+	// Notes should be preserved
+	assert.Equal(t, notes, payload["notes"])
+
+	// Should have truncation flags
+	assert.Contains(t, payload, "questions_truncated")
+	assert.Contains(t, payload, "total_questions")
+
+	// Should have fewer questions than original
+	truncatedQuestions := payload["questions"].([]any)
+	assert.Less(t, len(truncatedQuestions), len(questions))
+	assert.Equal(t, len(questions), int(payload["total_questions"].(float64)))
+}
+
+func TestRealEventEmitterDeterministicTruncationOrchestrationPlanConflict(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 512)
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Create a large plan conflict payload
+	candidates := []map[string]any{
+		{"path": "PLAN.md", "confidence": 0.9, "content": strings.Repeat("x", 150)},
+		{"path": "docs/plan_v2.md", "confidence": 0.8, "content": strings.Repeat("y", 150)},
+		{"path": "docs/plan_v3.md", "confidence": 0.7, "content": strings.Repeat("z", 150)},
+		{"path": "docs/plan_v4.md", "confidence": 0.6, "content": strings.Repeat("w", 150)},
+	}
+	reason := "Multiple high-confidence plans diverge in scope"
+
+	err := emitter.SendOrchestrationPlanConflictEvent(cmd, candidates, reason)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "_truncated")
+
+	// Parse the output
+	var result map[string]any
+	err = json.Unmarshal([]byte(output), &result)
+	require.NoError(t, err)
+
+	payload := result["payload"].(map[string]any)
+
+	// Reason should be preserved
+	assert.Equal(t, reason, payload["reason"])
+
+	// Should have truncation flag
+	assert.Contains(t, payload, "candidates_truncated")
+
+	// Should have fewer candidates than original
+	truncatedCandidates := payload["candidates"].([]any)
+	assert.Less(t, len(truncatedCandidates), len(candidates))
+
+	// Should be sorted by confidence (descending)
+	if len(truncatedCandidates) > 1 {
+		firstConf, _ := truncatedCandidates[0].(map[string]any)["confidence"].(float64)
+		secondConf, _ := truncatedCandidates[1].(map[string]any)["confidence"].(float64)
+		assert.GreaterOrEqual(t, firstConf, secondConf)
+	}
+}
+
+func TestRealEventEmitterDeterministicTruncationGenericEvent(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent", 512)
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Create a large generic event payload
+	largePayload := make(map[string]any)
+	largePayload["data"] = strings.Repeat("x", 1000) // 1KB of data
+
+	evt := emitter.NewEvent(cmd, "test.large_event")
+	evt.Payload = largePayload
+
+	err := emitter.EncodeEventCapped(evt)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "_truncated")
+
+	// Parse the output
+	var result map[string]any
+	err = json.Unmarshal([]byte(output), &result)
+	require.NoError(t, err)
+
+	payload := result["payload"].(map[string]any)
+
+	// Should have generic truncation
+	assert.Contains(t, payload, "_truncated")
+	truncated := payload["_truncated"].(string)
+	assert.Contains(t, truncated, "data")
+	assert.NotContains(t, truncated, strings.Repeat("x", 1000)) // Should be truncated
+}
+

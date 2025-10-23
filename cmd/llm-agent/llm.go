@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -41,17 +44,90 @@ func (r *RealLLMCaller) Call(ctx context.Context, prompt string) (string, error)
 	cmdCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
 	defer cancel()
 
-	_ = exec.CommandContext(cmdCtx, r.config.CLIPath) // TODO: Implement full subprocess management
+	// Create the command
+	cmd := exec.CommandContext(cmdCtx, r.config.CLIPath)
 
-	// TODO: Implement full subprocess management
-	// - Set up stdin/stdout pipes
-	// - Write prompt to stdin
-	// - Read response from stdout with size limits
-	// - Handle stderr for diagnostics
-	// - Wait for completion
+	// Set up pipes
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+	defer stdin.Close()
 
-	// Stub implementation
-	return fmt.Sprintf("LLM response to: %s", prompt), nil
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	defer stdout.Close()
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+	defer stderr.Close()
+
+	// Start the process
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start LLM CLI: %w", err)
+	}
+
+	// Write prompt to stdin in a goroutine
+	writeDone := make(chan error, 1)
+	go func() {
+		defer stdin.Close()
+		_, err := io.WriteString(stdin, prompt)
+		writeDone <- err
+	}()
+
+	// Read stdout with size limit
+	var output bytes.Buffer
+	limitedReader := io.LimitReader(stdout, r.config.MaxOutputBytes)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, limitedReader)
+		readDone <- err
+	}()
+
+	// Capture stderr for diagnostics (non-blocking)
+	var stderrBuf bytes.Buffer
+	go func() {
+		io.Copy(&stderrBuf, stderr)
+	}()
+
+	// Wait for stdin write to complete
+	if err := <-writeDone; err != nil {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return "", fmt.Errorf("failed to write prompt to stdin: %w", err)
+	}
+
+	// Wait for stdout read to complete
+	if err := <-readDone; err != nil {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return "", fmt.Errorf("failed to read LLM output: %w", err)
+	}
+
+	// Wait for the process to complete
+	if err := cmd.Wait(); err != nil {
+		// Log stderr for diagnostics (but don't fail on stderr content)
+		if stderrBuf.Len() > 0 {
+			fmt.Fprintf(os.Stderr, "LLM CLI stderr: %s\n", stderrBuf.String())
+		}
+		return "", fmt.Errorf("LLM CLI failed: %w", err)
+	}
+
+	// Check if we hit the size limit
+	if output.Len() >= int(r.config.MaxOutputBytes) {
+		return "", fmt.Errorf("LLM output exceeds size limit of %d bytes", r.config.MaxOutputBytes)
+	}
+
+	// Log stderr for diagnostics if present
+	if stderrBuf.Len() > 0 {
+		fmt.Fprintf(os.Stderr, "LLM CLI stderr: %s\n", stderrBuf.String())
+	}
+
+	return output.String(), nil
 }
 
 // MockLLMCaller implements LLMCaller for testing

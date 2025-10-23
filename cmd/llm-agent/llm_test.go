@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,17 +20,82 @@ func TestLLMConfig(t *testing.T) {
 }
 
 func TestRealLLMCaller(t *testing.T) {
-	config := DefaultLLMConfig("claude")
+	// Create a mock LLM CLI script for testing
+	mockScript := createMockLLMScript(t)
+	defer os.Remove(mockScript)
+
+	config := DefaultLLMConfig(mockScript)
 	caller := NewRealLLMCaller(config)
 
 	ctx := context.Background()
 	prompt := "Test prompt"
 
-	// This will return a stub response for now
 	response, err := caller.Call(ctx, prompt)
 	require.NoError(t, err)
-	assert.Contains(t, response, "LLM response to:")
-	assert.Contains(t, response, prompt)
+	// Trim newlines from the response
+	response = strings.TrimSpace(response)
+	assert.Equal(t, "Mock LLM response to: Test prompt", response)
+}
+
+func TestRealLLMCallerTimeout(t *testing.T) {
+	// Create a slow mock LLM CLI script for testing
+	slowScript := createSlowMockLLMScript(t)
+	defer os.Remove(slowScript)
+
+	config := LLMConfig{
+		CLIPath:        slowScript,
+		Timeout:        100 * time.Millisecond, // Very short timeout
+		MaxOutputBytes: 1024,
+	}
+	caller := NewRealLLMCaller(config)
+
+	ctx := context.Background()
+	prompt := "Test prompt"
+
+	_, err := caller.Call(ctx, prompt)
+	require.Error(t, err)
+	// The error could be either context deadline exceeded or signal killed
+	assert.True(t, strings.Contains(err.Error(), "context deadline exceeded") ||
+		strings.Contains(err.Error(), "signal: killed"))
+}
+
+func TestRealLLMCallerSizeLimit(t *testing.T) {
+	// Create a mock LLM CLI script that outputs large content
+	largeScript := createLargeOutputMockLLMScript(t)
+	defer os.Remove(largeScript)
+
+	config := LLMConfig{
+		CLIPath:        largeScript,
+		Timeout:        5 * time.Second,
+		MaxOutputBytes: 100, // Very small limit
+	}
+	caller := NewRealLLMCaller(config)
+
+	ctx := context.Background()
+	prompt := "Test prompt"
+
+	_, err := caller.Call(ctx, prompt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds size limit")
+}
+
+func TestRealLLMCallerStderrPassthrough(t *testing.T) {
+	// Create a mock LLM CLI script that writes to stderr
+	stderrScript := createStderrMockLLMScript(t)
+	defer os.Remove(stderrScript)
+
+	config := DefaultLLMConfig(stderrScript)
+	caller := NewRealLLMCaller(config)
+
+	ctx := context.Background()
+	prompt := "Test prompt"
+
+	response, err := caller.Call(ctx, prompt)
+	require.NoError(t, err)
+	// Trim newlines from the response
+	response = strings.TrimSpace(response)
+	assert.Equal(t, "Mock LLM response", response)
+	// Note: stderr output is logged but doesn't affect the response
 }
 
 func TestMockLLMCaller(t *testing.T) {
@@ -94,4 +161,64 @@ func TestMockLLMCallerMultipleResponses(t *testing.T) {
 	response3, err := caller.Call(ctx, "unknown")
 	require.NoError(t, err)
 	assert.Contains(t, response3, "plan_file") // Default response
+}
+
+// Helper functions to create mock LLM CLI scripts for testing
+
+func createMockLLMScript(t *testing.T) string {
+	script := `#!/bin/bash
+# Read input from stdin
+input=$(cat)
+echo "Mock LLM response to: $input"
+`
+	return createTempScript(t, script)
+}
+
+func createSlowMockLLMScript(t *testing.T) string {
+	script := `#!/bin/bash
+# Read input from stdin
+input=$(cat)
+sleep 1  # Sleep for 1 second (longer than test timeout)
+echo "Mock LLM response to: $input"
+`
+	return createTempScript(t, script)
+}
+
+func createLargeOutputMockLLMScript(t *testing.T) string {
+	script := `#!/bin/bash
+# Read input from stdin
+input=$(cat)
+# Generate large output (200 characters)
+printf "A%.0s" {1..200}
+echo ""
+`
+	return createTempScript(t, script)
+}
+
+func createStderrMockLLMScript(t *testing.T) string {
+	script := `#!/bin/bash
+# Read input from stdin
+input=$(cat)
+# Write to stderr
+echo "Debug info: processing $input" >&2
+echo "Mock LLM response"
+`
+	return createTempScript(t, script)
+}
+
+func createTempScript(t *testing.T, content string) string {
+	// Create a temporary file
+	tmpFile, err := os.CreateTemp("", "mock-llm-*.sh")
+	require.NoError(t, err)
+	defer tmpFile.Close()
+
+	// Write the script content
+	_, err = tmpFile.WriteString(content)
+	require.NoError(t, err)
+
+	// Make it executable
+	err = os.Chmod(tmpFile.Name(), 0755)
+	require.NoError(t, err)
+
+	return tmpFile.Name()
 }

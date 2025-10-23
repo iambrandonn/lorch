@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,15 +15,20 @@ import (
 
 func TestLLMCallerInterface(t *testing.T) {
 	t.Run("RealLLMCaller", func(t *testing.T) {
-		config := DefaultLLMConfig("claude")
+		// Create a mock LLM CLI script for testing
+		mockScript := createMockLLMScript(t)
+		defer os.Remove(mockScript)
+
+		config := DefaultLLMConfig(mockScript)
 		caller := NewRealLLMCaller(config)
 
 		ctx := context.Background()
 		prompt := "Test prompt"
 
-		// This will return a stub response for now
 		response, err := caller.Call(ctx, prompt)
 		require.NoError(t, err)
+		// Trim newlines from the response
+		response = strings.TrimSpace(response)
 		assert.Contains(t, response, "LLM response to:")
 	})
 
@@ -189,3 +196,4 @@ func TestNewLLMAgent(t *testing.T) {
 	assert.Equal(t, config.LLMCLI, agent.config.LLMCLI)
 	assert.Equal(t, config.Workspace, agent.config.Workspace)
 }
+

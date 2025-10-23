@@ -64,6 +64,7 @@ type AgentConfig struct {
 	LLMCLI    string
 	Workspace string
 	Logger    *slog.Logger
+	MaxMessageBytes int
 }
 
 // LLMAgent interface is defined in agent.go
