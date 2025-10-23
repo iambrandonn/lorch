@@ -25,6 +25,7 @@ type ReceiptStore interface {
 	LoadReceipt(path string) (*Receipt, error)
 	SaveReceipt(path string, receipt *Receipt) error
 	FindReceiptByIK(taskID, action, ik string) (*Receipt, string, error)
+	SaveReceiptWithIndex(receiptPath string, receipt *Receipt) error
 }
 
 // Receipt represents a stored receipt for idempotency

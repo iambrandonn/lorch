@@ -793,3 +793,206 @@ func TestMockEventEmitterRedaction(t *testing.T) {
 	assert.Equal(t, "john_doe", log.Fields["user_name"])
 	assert.Equal(t, "token456", log.Fields["access_token"])
 }
+
+func TestMockEventEmitterArtifactProducedEvent(t *testing.T) {
+	emitter := NewMockEventEmitter()
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test artifact.produced event
+	artifact := protocol.Artifact{
+		Path:   "test/artifact.txt",
+		SHA256: "sha256:abc123def456",
+		Size:   1024,
+	}
+
+	err := emitter.SendArtifactProducedEvent(cmd, artifact)
+	require.NoError(t, err)
+
+	// Verify event was recorded
+	events := emitter.GetEvents()
+	assert.Len(t, events, 1)
+
+	event := events[0]
+	assert.Equal(t, "artifact.produced", event.Event)
+	assert.Equal(t, "success", event.Status)
+	assert.Equal(t, "corr-1", event.CorrelationID)
+	assert.Equal(t, "T-001", event.TaskID)
+	assert.Equal(t, "snap-1", event.ObservedVersion.SnapshotID)
+
+	// Verify artifact details
+	assert.Len(t, event.Artifacts, 1)
+	assert.Equal(t, "test/artifact.txt", event.Artifacts[0].Path)
+	assert.Equal(t, "sha256:abc123def456", event.Artifacts[0].SHA256)
+	assert.Equal(t, int64(1024), event.Artifacts[0].Size)
+
+	// Verify payload
+	assert.Equal(t, "Generated artifact", event.Payload["description"])
+
+	// Verify artifact log
+	artifactLog := emitter.GetArtifactLog()
+	assert.Len(t, artifactLog, 1)
+	assert.Contains(t, artifactLog, "SendArtifactProducedEvent(test/artifact.txt)")
+}
+
+func TestMockEventEmitterMultipleArtifactProducedEvents(t *testing.T) {
+	emitter := NewMockEventEmitter()
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test multiple artifact.produced events
+	artifacts := []protocol.Artifact{
+		{Path: "file1.txt", SHA256: "sha256:abc", Size: 100},
+		{Path: "file2.txt", SHA256: "sha256:def", Size: 200},
+		{Path: "file3.txt", SHA256: "sha256:ghi", Size: 300},
+	}
+
+	for _, artifact := range artifacts {
+		err := emitter.SendArtifactProducedEvent(cmd, artifact)
+		require.NoError(t, err)
+	}
+
+	// Verify all events were recorded
+	events := emitter.GetEvents()
+	assert.Len(t, events, 3)
+
+	// Check each event
+	for i, event := range events {
+		assert.Equal(t, "artifact.produced", event.Event)
+		assert.Equal(t, "success", event.Status)
+		assert.Equal(t, "corr-1", event.CorrelationID)
+		assert.Equal(t, "T-001", event.TaskID)
+		assert.Equal(t, "snap-1", event.ObservedVersion.SnapshotID)
+		assert.Len(t, event.Artifacts, 1)
+		assert.Equal(t, artifacts[i].Path, event.Artifacts[0].Path)
+		assert.Equal(t, artifacts[i].SHA256, event.Artifacts[0].SHA256)
+		assert.Equal(t, artifacts[i].Size, event.Artifacts[0].Size)
+	}
+
+	// Verify artifact log
+	artifactLog := emitter.GetArtifactLog()
+	assert.Len(t, artifactLog, 3)
+	assert.Contains(t, artifactLog, "SendArtifactProducedEvent(file1.txt)")
+	assert.Contains(t, artifactLog, "SendArtifactProducedEvent(file2.txt)")
+	assert.Contains(t, artifactLog, "SendArtifactProducedEvent(file3.txt)")
+}
+
+func TestMockEventEmitterArtifactProducedEventWithEmptyArtifact(t *testing.T) {
+	emitter := NewMockEventEmitter()
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test artifact.produced event with empty artifact
+	artifact := protocol.Artifact{
+		Path:   "",
+		SHA256: "",
+		Size:   0,
+	}
+
+	err := emitter.SendArtifactProducedEvent(cmd, artifact)
+	require.NoError(t, err)
+
+	// Verify event was recorded
+	events := emitter.GetEvents()
+	assert.Len(t, events, 1)
+
+	event := events[0]
+	assert.Equal(t, "artifact.produced", event.Event)
+	assert.Equal(t, "success", event.Status)
+	assert.Len(t, event.Artifacts, 1)
+	assert.Equal(t, "", event.Artifacts[0].Path)
+	assert.Equal(t, "", event.Artifacts[0].SHA256)
+	assert.Equal(t, int64(0), event.Artifacts[0].Size)
+}
+
+func TestRealEventEmitterArtifactProducedEvent(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test artifact.produced event
+	artifact := protocol.Artifact{
+		Path:   "test/artifact.txt",
+		SHA256: "sha256:abc123def456",
+		Size:   1024,
+	}
+
+	err := emitter.SendArtifactProducedEvent(cmd, artifact)
+	require.NoError(t, err)
+
+	// Verify the output contains proper artifact structure
+	output := buf.String()
+	assert.Contains(t, output, `"event":"artifact.produced"`)
+	assert.Contains(t, output, `"status":"success"`)
+	assert.Contains(t, output, `"path":"test/artifact.txt"`)
+	assert.Contains(t, output, `"sha256":"sha256:abc123def456"`)
+	assert.Contains(t, output, `"size":1024`)
+	assert.Contains(t, output, `"description":"Generated artifact"`)
+}
+
+func TestRealEventEmitterArtifactProducedEventProtocolCompliance(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger, protocol.AgentTypeOrchestration, "test-agent")
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test that all required fields are present
+	artifact := protocol.Artifact{
+		Path:   "test/artifact.txt",
+		SHA256: "sha256:abc123def456",
+		Size:   1024,
+	}
+
+	err := emitter.SendArtifactProducedEvent(cmd, artifact)
+	require.NoError(t, err)
+
+	// Verify the output contains all required protocol fields
+	output := buf.String()
+	assert.Contains(t, output, `"kind":"event"`)
+	assert.Contains(t, output, `"event":"artifact.produced"`)
+	assert.Contains(t, output, `"message_id"`)
+	assert.Contains(t, output, `"correlation_id":"corr-1"`)
+	assert.Contains(t, output, `"task_id":"T-001"`)
+	assert.Contains(t, output, `"from":{"agent_type":"orchestration","agent_id":"test-agent"}`)
+	assert.Contains(t, output, `"status":"success"`)
+	assert.Contains(t, output, `"occurred_at"`)
+	assert.Contains(t, output, `"observed_version":{"snapshot_id":"snap-1"}`)
+	assert.Contains(t, output, `"artifacts":[{"path":"test/artifact.txt","sha256":"sha256:abc123def456","size":1024}]`)
+}

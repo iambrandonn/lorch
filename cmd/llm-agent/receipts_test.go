@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -166,4 +169,190 @@ func TestMockReceiptStoreMultipleReceipts(t *testing.T) {
 
 	// Paths should be different
 	assert.NotEqual(t, path1, path2)
+}
+
+func TestRealReceiptStoreIKIndex(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+	store := NewRealReceiptStore(tempDir)
+
+	receipt := &Receipt{
+		TaskID:         "T-001",
+		Step:           1,
+		IdempotencyKey: "ik-test-123",
+		Artifacts:     []protocol.Artifact{},
+		Events:        []string{"event-1"},
+		CreatedAt:     time.Now(),
+	}
+
+	receiptPath := filepath.Join(tempDir, "receipts", "T-001", "implement-1.json")
+
+	// Test SaveReceiptWithIndex
+	err := store.SaveReceiptWithIndex(receiptPath, receipt)
+	require.NoError(t, err)
+
+	// Verify receipt was saved
+	loaded, err := store.LoadReceipt(receiptPath)
+	require.NoError(t, err)
+	assert.Equal(t, receipt.IdempotencyKey, loaded.IdempotencyKey)
+
+	// Verify index was created
+	ikHash := store.generateIKHash("ik-test-123")
+	indexPath := filepath.Join(tempDir, "receipts", "T-001", "index", "by-ik", ikHash+".json")
+	indexData, err := os.ReadFile(indexPath)
+	require.NoError(t, err)
+
+	var index map[string]string
+	err = json.Unmarshal(indexData, &index)
+	require.NoError(t, err)
+	assert.Equal(t, receiptPath, index["receipt_path"])
+
+	// Test FindReceiptByIK uses index
+	found, path, err := store.FindReceiptByIK("T-001", "implement", "ik-test-123")
+	require.NoError(t, err)
+	assert.NotNil(t, found)
+	assert.Equal(t, receiptPath, path)
+	assert.Equal(t, "ik-test-123", found.IdempotencyKey)
+}
+
+func TestRealReceiptStoreIKIndexFallback(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+	store := NewRealReceiptStore(tempDir)
+
+	receipt := &Receipt{
+		TaskID:         "T-001",
+		Step:           1,
+		IdempotencyKey: "ik-test-456",
+		Artifacts:     []protocol.Artifact{},
+		Events:        []string{"event-1"},
+		CreatedAt:     time.Now(),
+	}
+
+	receiptPath := filepath.Join(tempDir, "receipts", "T-001", "implement-1.json")
+
+	// Save receipt without index
+	err := store.SaveReceipt(receiptPath, receipt)
+	require.NoError(t, err)
+
+	// Test FindReceiptByIK falls back to scan when index is missing
+	found, path, err := store.FindReceiptByIK("T-001", "implement", "ik-test-456")
+	require.NoError(t, err)
+	assert.NotNil(t, found)
+	assert.Equal(t, receiptPath, path)
+	assert.Equal(t, "ik-test-456", found.IdempotencyKey)
+}
+
+func TestRealReceiptStoreIKIndexCorrupted(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+	store := NewRealReceiptStore(tempDir)
+
+	receipt := &Receipt{
+		TaskID:         "T-001",
+		Step:           1,
+		IdempotencyKey: "ik-test-789",
+		Artifacts:     []protocol.Artifact{},
+		Events:        []string{"event-1"},
+		CreatedAt:     time.Now(),
+	}
+
+	receiptPath := filepath.Join(tempDir, "receipts", "T-001", "implement-1.json")
+
+	// Save receipt with index
+	err := store.SaveReceiptWithIndex(receiptPath, receipt)
+	require.NoError(t, err)
+
+	// Corrupt the index file
+	ikHash := store.generateIKHash("ik-test-789")
+	indexPath := filepath.Join(tempDir, "receipts", "T-001", "index", "by-ik", ikHash+".json")
+	err = os.WriteFile(indexPath, []byte("invalid json"), 0600)
+	require.NoError(t, err)
+
+	// Test FindReceiptByIK falls back to scan when index is corrupted
+	found, path, err := store.FindReceiptByIK("T-001", "implement", "ik-test-789")
+	require.NoError(t, err)
+	assert.NotNil(t, found)
+	assert.Equal(t, receiptPath, path)
+	assert.Equal(t, "ik-test-789", found.IdempotencyKey)
+}
+
+func TestRealReceiptStoreIKIndexMismatch(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+	store := NewRealReceiptStore(tempDir)
+
+	receipt := &Receipt{
+		TaskID:         "T-001",
+		Step:           1,
+		IdempotencyKey: "ik-test-999",
+		Artifacts:     []protocol.Artifact{},
+		Events:        []string{"event-1"},
+		CreatedAt:     time.Now(),
+	}
+
+	receiptPath := filepath.Join(tempDir, "receipts", "T-001", "implement-1.json")
+
+	// Save receipt with index
+	err := store.SaveReceiptWithIndex(receiptPath, receipt)
+	require.NoError(t, err)
+
+	// Create a corrupted index that points to a different IK
+	ikHash := store.generateIKHash("ik-test-999")
+	indexPath := filepath.Join(tempDir, "receipts", "T-001", "index", "by-ik", ikHash+".json")
+
+	// Point index to a receipt with different IK
+	otherReceipt := &Receipt{
+		TaskID:         "T-001",
+		Step:           2,
+		IdempotencyKey: "ik-different-999",
+		Artifacts:     []protocol.Artifact{},
+		Events:        []string{"event-2"},
+		CreatedAt:     time.Now(),
+	}
+	otherReceiptPath := filepath.Join(tempDir, "receipts", "T-001", "implement-2.json")
+	err = store.SaveReceipt(otherReceiptPath, otherReceipt)
+	require.NoError(t, err)
+
+	// Corrupt the index to point to wrong receipt
+	indexData := map[string]string{"receipt_path": otherReceiptPath}
+	data, _ := json.Marshal(indexData)
+	err = os.WriteFile(indexPath, data, 0600)
+	require.NoError(t, err)
+
+	// Test FindReceiptByIK falls back to scan when index points to wrong receipt
+	found, path, err := store.FindReceiptByIK("T-001", "implement", "ik-test-999")
+	require.NoError(t, err)
+	assert.NotNil(t, found)
+	assert.Equal(t, receiptPath, path)
+	assert.Equal(t, "ik-test-999", found.IdempotencyKey)
+}
+
+func TestMockReceiptStoreSaveReceiptWithIndex(t *testing.T) {
+	store := NewMockReceiptStore()
+
+	receipt := &Receipt{
+		TaskID:         "T-001",
+		Step:           1,
+		IdempotencyKey: "ik-test-mock",
+		Artifacts:     []protocol.Artifact{},
+		Events:        []string{"event-1"},
+		CreatedAt:     time.Now(),
+	}
+
+	receiptPath := "/receipts/T-001/implement-1.json"
+
+	// Test SaveReceiptWithIndex
+	err := store.SaveReceiptWithIndex(receiptPath, receipt)
+	require.NoError(t, err)
+
+	// Verify receipt was saved
+	loaded, err := store.LoadReceipt(receiptPath)
+	require.NoError(t, err)
+	assert.Equal(t, receipt.IdempotencyKey, loaded.IdempotencyKey)
+
+	// Verify call log includes the new method
+	log := store.GetCallLog()
+	assert.Contains(t, log, "SaveReceiptWithIndex(/receipts/T-001/implement-1.json)")
+	assert.Contains(t, log, "SaveReceipt(/receipts/T-001/implement-1.json)")
 }

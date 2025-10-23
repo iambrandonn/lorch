@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -55,8 +56,53 @@ func (r *RealReceiptStore) SaveReceipt(path string, receipt *Receipt) error {
 	return nil
 }
 
-// FindReceiptByIK scans the receipts directory for a receipt with matching idempotency key
+// FindReceiptByIK checks index first, falls back to directory scan
 func (r *RealReceiptStore) FindReceiptByIK(taskID, action, ik string) (*Receipt, string, error) {
+	// Try index first (O(1))
+	receipt, path, err := r.findReceiptByIKIndex(taskID, action, ik)
+	if err == nil && receipt != nil {
+		return receipt, path, nil
+	}
+
+	// Fall back to directory scan (existing code)
+	return r.findReceiptByIKScan(taskID, action, ik)
+}
+
+// findReceiptByIKIndex checks the IK index for fast lookup
+func (r *RealReceiptStore) findReceiptByIKIndex(taskID, action, ik string) (*Receipt, string, error) {
+	ikHash := r.generateIKHash(ik)
+	indexPath := filepath.Join(r.workspace, "receipts", taskID, "index", "by-ik", ikHash+".json")
+
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		return nil, "", err // Index not found or error
+	}
+
+	var idx map[string]string
+	if err := json.Unmarshal(data, &idx); err != nil {
+		return nil, "", err
+	}
+
+	receiptPath, ok := idx["receipt_path"]
+	if !ok {
+		return nil, "", fmt.Errorf("index missing receipt_path")
+	}
+
+	receipt, err := r.LoadReceipt(receiptPath)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Verify the receipt actually matches the IK (safety check)
+	if receipt.IdempotencyKey != ik {
+		return nil, "", fmt.Errorf("index points to receipt with different IK")
+	}
+
+	return receipt, receiptPath, nil
+}
+
+// findReceiptByIKScan performs directory scan for IK lookup (fallback)
+func (r *RealReceiptStore) findReceiptByIKScan(taskID, action, ik string) (*Receipt, string, error) {
 	receiptDir := filepath.Join(r.workspace, "receipts", taskID)
 	entries, err := os.ReadDir(receiptDir)
 	if err != nil {
@@ -88,6 +134,33 @@ func (r *RealReceiptStore) FindReceiptByIK(taskID, action, ik string) (*Receipt,
 	}
 
 	return nil, "", nil // No matching receipt
+}
+
+// generateIKHash creates a hash for the IK index
+func (r *RealReceiptStore) generateIKHash(ik string) string {
+	hash := sha256.Sum256([]byte(ik))
+	return fmt.Sprintf("%x", hash)[:8]
+}
+
+// SaveReceiptWithIndex saves a receipt and creates an IK index entry
+func (r *RealReceiptStore) SaveReceiptWithIndex(receiptPath string, receipt *Receipt) error {
+	// Save main receipt
+	if err := r.SaveReceipt(receiptPath, receipt); err != nil {
+		return err
+	}
+
+	// Best-effort index (failures don't block receipt save)
+	indexDir := filepath.Join(r.workspace, "receipts", receipt.TaskID, "index", "by-ik")
+	if err := os.MkdirAll(indexDir, 0700); err == nil {
+		ikHash := r.generateIKHash(receipt.IdempotencyKey)
+		indexPath := filepath.Join(indexDir, ikHash+".json")
+		indexData := map[string]string{"receipt_path": receiptPath}
+		if data, err := json.Marshal(indexData); err == nil {
+			_ = os.WriteFile(indexPath, data, 0600) // Best effort
+		}
+	}
+
+	return nil
 }
 
 // MockReceiptStore implements ReceiptStore for testing
@@ -148,4 +221,10 @@ func (m *MockReceiptStore) ClearCallLog() {
 // SetReceipt sets a receipt in the mock store for testing
 func (m *MockReceiptStore) SetReceipt(path string, receipt *Receipt) {
 	m.receipts[path] = receipt
+}
+
+// SaveReceiptWithIndex is a no-op for mock store (index not needed for testing)
+func (m *MockReceiptStore) SaveReceiptWithIndex(receiptPath string, receipt *Receipt) error {
+	m.callLog = append(m.callLog, fmt.Sprintf("SaveReceiptWithIndex(%s)", receiptPath))
+	return m.SaveReceipt(receiptPath, receipt)
 }

@@ -32,11 +32,21 @@ func (r *RealFSProvider) ResolveWorkspacePath(workspace, relative string) (strin
 		return "", fmt.Errorf("failed to resolve workspace: %w", err)
 	}
 
-	// Join and resolve symlinks in target path
+	// Check if relative path is absolute (starts with /)
+	if filepath.IsAbs(relative) {
+		return "", fmt.Errorf("path escapes workspace: %s", relative)
+	}
+
+	// Join paths
 	joined := filepath.Join(rootAbs, relative)
-	fullAbs, err := filepath.EvalSymlinks(filepath.Clean(joined))
+	cleanJoined := filepath.Clean(joined)
+
+	// Try to resolve symlinks, but don't fail if the target doesn't exist yet
+	fullAbs, err := filepath.EvalSymlinks(cleanJoined)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+		// If the path doesn't exist, use the cleaned path
+		// This is safe because we'll validate it's within the workspace
+		fullAbs = cleanJoined
 	}
 
 	// Ensure fullAbs is within rootAbs (with path separator guard)
@@ -71,6 +81,13 @@ func (r *RealFSProvider) ReadFileSafe(path string, maxSize int64) (string, error
 
 // WriteArtifactAtomic writes an artifact using the atomic write pattern
 func (r *RealFSProvider) WriteArtifactAtomic(workspace, relativePath string, content []byte) (protocol.Artifact, error) {
+	// Check artifact size cap BEFORE writing (per spec §12)
+	maxSize := int64(1 * 1024 * 1024 * 1024) // 1 GiB default
+	if int64(len(content)) > maxSize {
+		return protocol.Artifact{}, fmt.Errorf("artifact exceeds size cap: %d > %d bytes",
+			len(content), maxSize)
+	}
+
 	// Security: validate path with symlink-safe resolution
 	fullPath, err := r.ResolveWorkspacePath(workspace, relativePath)
 	if err != nil {
@@ -118,6 +135,14 @@ func (r *RealFSProvider) WriteArtifactAtomic(workspace, relativePath string, con
 	if err != nil {
 		return protocol.Artifact{}, err
 	}
+
+	// Verify final size after write (double-check size cap)
+	if int64(len(fileData)) > maxSize {
+		os.Remove(fullPath) // Cleanup oversized artifact
+		return protocol.Artifact{}, fmt.Errorf("artifact exceeds size cap after write: %d > %d",
+			len(fileData), maxSize)
+	}
+
 	hash := sha256.Sum256(fileData)
 
 	return protocol.Artifact{
@@ -171,6 +196,13 @@ func (m *MockFSProvider) ReadFileSafe(path string, maxSize int64) (string, error
 // WriteArtifactAtomic mocks atomic artifact writing
 func (m *MockFSProvider) WriteArtifactAtomic(workspace, relativePath string, content []byte) (protocol.Artifact, error) {
 	m.writeLog = append(m.writeLog, fmt.Sprintf("WriteArtifactAtomic(%s, %s, %d bytes)", workspace, relativePath, len(content)))
+
+	// Check artifact size cap (same as real implementation)
+	maxSize := int64(1 * 1024 * 1024 * 1024) // 1 GiB default
+	if int64(len(content)) > maxSize {
+		return protocol.Artifact{}, fmt.Errorf("artifact exceeds size cap: %d > %d bytes",
+			len(content), maxSize)
+	}
 
 	// Store the content
 	fullPath := filepath.Join(workspace, relativePath)
