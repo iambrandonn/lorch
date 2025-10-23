@@ -269,16 +269,161 @@ Introduce the orchestration agent, add NL intake flows, and route approved plans
 - **Exit criteria** ✅ **MET**: documentation refreshed, UX copy stabilized, and regression suite green (21 new tests).
 
 ## Phase 3 – Interactive Configuration
-Ship `lorch config`, validation enhancements, and flexible agent/tool settings.
+Ship `lorch config` interactive editor with validation and comprehensive documentation.
 
-- **Config editor**
-  - Interactive TUI/CLI flow to edit `lorch.json` with immediate validation feedback.
-- **Schema & compatibility checks**
-  - Enforce versioning, detect deprecated keys, and surface warnings.
-- **Extensibility hooks**
-  - Support per-agent environment overrides, credential prompts, and toolchain presets without code changes.
-- **Testing**
-  - Unit tests for config transformations, compatibility migrations, and validation failure reporting.
+> **Note**: This plan follows a **pragmatic approach** based on technical review (see `docs/development/phase-3-review.md`). The original plan included ~40% scope creep with premature migration frameworks, preset systems, and credential management that solve problems we don't have yet. This revision focuses on the core MASTER-SPEC requirement: **the interactive config editor**. Features like presets and migrations can be added later when actually needed (YAGNI principle).
+
+### P3.1 Milestone – Basic Validation & Version Checking
+Build focused validation layer with clear error messages. Defer migration framework until schema changes actually exist (YAGNI principle).
+
+- **Tests first**
+  - Unit tests for validation (required fields, valid enums, type checking, ranges)
+  - Unit tests for version checking (match, newer, older, incompatible)
+  - Field-level validation helpers for editor integration
+  - Negative tests: missing required fields, invalid values, malformed JSON
+- **Task A – Struct Validation Enhancement** (`internal/config/validation.go`)
+  - Extract validation logic from existing `Validate()` into reusable field validators
+  - Add `ValidateField(fieldName, value) error` helpers for interactive editor use
+  - Provide field-specific error messages (e.g., "agents.builder.cmd cannot be empty")
+  - Validate enums, ranges, required fields, agent configurations
+- **Task B – Version Checking** (`internal/config/version.go`)
+  - Implement `CheckVersion(cfg) (warnings, errors []error)` to compare config.version against expected
+  - Warn if config.version != expected (e.g., "Config is v1.1, binary expects v1.0")
+  - Error if config.version is incompatible (major version mismatch)
+  - Document version policy in code comments
+- **Task C – Validation Result Structure** (`internal/config/validation.go`)
+  - Add `ValidationResult` struct: `{Errors []error, Warnings []error}`
+  - Update `Validate()` to return `ValidationResult` instead of single error
+  - Always validate strictly (same rules everywhere) but categorize issues
+  - Interactive editor can show warnings without blocking, but prevent save on errors
+- **Exit criteria**
+  - Validation rejects invalid configs with helpful, field-specific error messages
+  - Version check warns on mismatch, errors on incompatibility
+  - Field-level validators ready for editor integration
+  - ~15-20 unit tests passing (vs ~30+ with migration framework)
+
+### P3.2 Milestone – Interactive Config Editor (`lorch config`)
+Build simple prompt-based editor with real-time validation feedback (git config style). **This is the core Phase 3 deliverable.**
+
+- **Tests first**
+  - Integration tests with mocked stdin/stdout for non-TTY scenarios
+  - Validation feedback tests (show errors/warnings inline)
+  - Round-trip tests: edit → save → load → verify
+  - Golden transcript tests for prompt flows
+- **Task A – CLI Command Scaffold** (`internal/cli/config.go`)
+  - Create `lorch config` command with subcommands:
+    - `lorch config edit` - interactive editor (default)
+    - `lorch config get <key>` - read single value (e.g., `agents.builder.cmd`)
+    - `lorch config set <key> <value>` - write single value
+    - `lorch config show` - pretty-print current config
+  - Wire up cobra command with flags (--workspace, --config-file)
+- **Task B – Interactive Prompt Flow** (`internal/config/editor.go`)
+  - Implement section-based prompts (Policy → Agents → Tasks)
+  - For each field: show current value, prompt for new value, allow skip
+  - Display inline validation warnings/errors after each input (using P3.1 field validators)
+  - Confirm-before-save with diff preview (show what changed)
+  - Support `q` to quit, `?` for help at any prompt
+- **Task C – Field-Specific Editors**
+  - Simple types (string, int, bool): direct input with validation
+  - Arrays (cmd, tasks): comma-separated or one-per-line mode
+  - Maps (env, timeouts_s): key=value pairs with add/remove/edit
+  - Nested objects (agents): section-level editing (edit entire agent as structured prompts)
+  - Note: Deep nested path editing (e.g., `agents.builder.cmd[0]`) can be added later if users request
+- **Task D – Diff Preview & Confirmation** (`internal/config/diff.go`)
+  - Generate human-readable diff before saving
+  - Show: fields added, removed, changed (old → new)
+  - Prompt: "Save these changes? [y/n]"
+  - On save: backup old config to `.lorch.json.backup.<timestamp>`
+  - Validate final config (prevent save if validation errors exist)
+- **Exit criteria**
+  - `lorch config edit` completes full flow (prompts → validation → diff → save)
+  - `lorch config get/set` work for nested keys like `agents.builder.cmd`
+  - Validation errors prevent save with clear inline feedback
+  - Diff preview shows accurate before/after comparison
+  - Non-TTY tests pass (automated CI-friendly)
+
+### P3.3 Milestone – Documentation & Example Configs
+Create comprehensive documentation and example configurations. **No new code required** - just docs and copy-paste-ready configs.
+
+- **Tests first**
+  - Validation tests: all example configs load successfully and pass validation
+  - Documentation snippet tests: ensure all code examples are syntactically correct
+  - Load test: verify each example config with `lorch validate`
+- **Task A – Configuration Documentation** (`docs/CONFIGURATION.md`)
+  - Create comprehensive reference covering all config fields
+  - Document structure: Policy, Agents (builder/reviewer/spec-maintainer/orchestration), Tasks
+  - Explain how agent configuration works (`cmd`, `env`, `timeouts_s`)
+  - Document environment variable usage (agents read from `agents.*.env`)
+  - Include troubleshooting section (common errors, validation failures)
+  - Add "How to configure different LLMs" section explaining extensibility
+- **Task B – Example Configurations** (`docs/examples/`)
+  - Create `docs/examples/lorch-claude.json`: claude-agent with typical Anthropic settings
+  - Create `docs/examples/lorch-openai.json`: generic OpenAI-compatible agent config
+  - Create `docs/examples/lorch-local-mock.json`: mockagent configuration for testing
+  - Create `docs/examples/README.md`: explains how to use examples, copy-paste workflow
+  - Document: "Copy example config: `cp docs/examples/lorch-claude.json lorch.json`"
+- **Task C – README Updates**
+  - Add "Configuration" section to main README.md
+  - Link to `docs/CONFIGURATION.md` for detailed reference
+  - Show quick example of switching agents (change `cmd` and `env`)
+  - Explain environment variable approach for credentials
+- **Exit criteria**
+  - `docs/CONFIGURATION.md` covers all config fields with examples
+  - All example configs are valid and load successfully (`lorch validate` passes)
+  - Users can configure different agents by copying and editing examples
+  - Documentation explains extensibility without requiring preset system
+  - ~0 new packages, ~0 new commands, ~3 new doc files
+
+### P3.4 Milestone – Validate Command & Polish
+Add `lorch validate` command with diagnostic capabilities. Defer standalone `doctor` command and migration tests until needed.
+
+- **Tests first**
+  - `lorch validate` command tests (valid/invalid configs, exit codes)
+  - Validation with `--verbose` flag (agent binary checks, directory checks)
+  - Config editor round-trip tests (edit → save → load → verify no spurious diffs)
+  - CLI help text tests (ensure examples are accurate)
+- **Task A – Validate Command** (`internal/cli/validate.go`)
+  - Implement `lorch validate [--config path]` command
+  - Validate schema: required fields, types, enums, ranges (using P3.1 validators)
+  - Check version compatibility (using P3.1 version checking)
+  - Exit codes: 0 = valid, 1 = errors, 2 = warnings only
+  - Add `--strict` flag to treat warnings as errors (CI mode)
+- **Task B – Diagnostic Mode** (`internal/cli/validate.go`)
+  - Add `--verbose` flag for detailed diagnostics (covers doctor use case)
+  - Checks when verbose:
+    - Agent binaries exist and are executable
+    - Required directories exist or can be created (state/, events/, receipts/)
+    - Workspace root is valid (optional warning if not git repo)
+  - Output: "✓ Config valid, ✓ Binaries found, ✗ /state/ missing (will be created on first run)"
+- **Task C – Editor Round-Trip Tests** (`internal/config/editor_test.go`)
+  - Test: edit config → save → load → verify no changes → no diff shown
+  - Test: edit with validation errors → prevent save
+  - Test: edit with warnings → show warnings → allow save
+  - Ensure atomic writes work correctly (backup created, no partial writes)
+- **Task D – CLI Polish**
+  - Update `lorch config --help` with clear usage examples
+  - Update `lorch validate --help` with flag descriptions and examples
+  - Ensure error messages reference docs: "See docs/CONFIGURATION.md for details"
+  - Add shell completion hints (optional, nice-to-have)
+- **Exit criteria**
+  - `lorch validate` reports clear errors for invalid configs
+  - `--strict` flag works for CI usage (treat warnings as errors)
+  - `--verbose` flag provides agent binary and directory diagnostics
+  - Config editor round-trip produces no spurious diffs
+  - CLI help text is clear and includes practical examples
+  - ~10-15 unit tests + integration tests passing
+
+**Phase 3 Summary – Pragmatic Approach**:
+- 📦 **4 new packages** (vs 8 original): `validation`, `version`, `editor`, `diff`
+  - Eliminated: `migration`, `presets`, `credentials`, `overrides` (YAGNI - add when needed)
+- 🔧 **4 new commands** (vs 6 original): `config edit/get/set/show`, `validate`
+  - Eliminated: `config init --preset`, `config list-presets`, standalone `doctor` (use `validate --verbose`)
+- 📝 **2 doc deliverables** (vs 3 original): `docs/CONFIGURATION.md`, `docs/examples/` (3 configs + README)
+  - Eliminated: `MIGRATION-GUIDE.md` (defer until migrations exist)
+- 🧪 **Test coverage**: ~40 tests (vs ~75 original) - unit + integration, no premature migration tests
+- 🎯 **Success criteria**: Users can interactively configure lorch, validation provides clear feedback, comprehensive docs enable any agent setup
+- ⏱️ **Estimated effort**: 13-17 days (vs 20-25 days) - **~35% faster delivery**
+- ✅ **Spec alignment**: Focuses on core Phase 3 requirement (interactive editor), defers speculative features
 
 ## Phase 4 – Advanced Error Handling & Conflict Resolution
 Improve diagnostics, recovery, and human control.
@@ -291,6 +436,13 @@ Improve diagnostics, recovery, and human control.
   - Better diff previews for SPEC.md updates, tools to accept/reject spec changes.
 - **Testing**
   - Fault-injection tests to validate recovery workflows and human-in-the-loop escalation.
+
+> **Optional additions** (deferred from Phase 3, add if user demand emerges):
+> - Config preset system (`lorch config init --preset <name>`) with embedded presets
+> - Credential management with interactive prompting and keychain integration
+> - Template expansion for env vars (`${VAR:-default}` syntax)
+> - Schema migration framework (when v1.1 or v2.0 introduces breaking changes)
+> - Standalone `lorch doctor` command (currently covered by `validate --verbose`)
 
 ## Cross-Cutting Activities
 - **Documentation**
