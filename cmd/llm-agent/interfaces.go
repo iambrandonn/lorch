@@ -51,6 +51,10 @@ type EventEmitter interface {
 	SendErrorEvent(cmd *protocol.Command, code, message string) error
 	SendArtifactProducedEvent(cmd *protocol.Command, artifact protocol.Artifact) error
 	SendLog(level, message string, fields map[string]any) error
+	// Orchestration-specific events
+	SendOrchestrationProposedTasksEvent(cmd *protocol.Command, planCandidates []map[string]any, derivedTasks []map[string]any, notes string) error
+	SendOrchestrationNeedsClarificationEvent(cmd *protocol.Command, questions []string, notes string) error
+	SendOrchestrationPlanConflictEvent(cmd *protocol.Command, candidates []map[string]any, reason string) error
 }
 
 // AgentConfig holds configuration for the LLM agent
@@ -61,29 +65,4 @@ type AgentConfig struct {
 	Logger    *slog.Logger
 }
 
-// LLMAgent represents the main agent implementation
-type LLMAgent struct {
-	config AgentConfig
-	// Interfaces will be injected
-	llmCaller    LLMCaller
-	receiptStore ReceiptStore
-	fsProvider   FSProvider
-	eventEmitter EventEmitter
-}
-
-// NewLLMAgent creates a new LLM agent with the given configuration
-func NewLLMAgent(cfg *AgentConfig) (*LLMAgent, error) {
-	// TODO: Initialize interfaces with real implementations
-	// For now, return a stub that can be used for testing
-	return &LLMAgent{
-		config: *cfg,
-		// Interfaces will be injected by workstreams
-	}, nil
-}
-
-// Run starts the agent's NDJSON I/O loop
-func (a *LLMAgent) Run(ctx context.Context, stdin, stdout, stderr interface{}) error {
-	// TODO: Implement NDJSON I/O loop
-	// This is a stub for parallel development
-	return nil
-}
+// LLMAgent interface is defined in agent.go

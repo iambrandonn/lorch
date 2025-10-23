@@ -70,13 +70,47 @@ func (e *RealEventEmitter) EncodeEventCapped(evt protocol.Event) error {
 	return e.encoder.Encode(evt)
 }
 
-// SendErrorEvent sends a structured error event
+// SendErrorEvent sends a structured error event with machine-readable error codes
 func (e *RealEventEmitter) SendErrorEvent(cmd *protocol.Command, code, message string) error {
 	evt := e.NewEvent(cmd, "error")
 	evt.Status = "failed"
 	evt.Payload = map[string]any{
 		"code":    code,
 		"message": message,
+	}
+	return e.EncodeEventCapped(evt)
+}
+
+// SendOrchestrationProposedTasksEvent sends an orchestration.proposed_tasks event
+func (e *RealEventEmitter) SendOrchestrationProposedTasksEvent(cmd *protocol.Command, planCandidates []map[string]any, derivedTasks []map[string]any, notes string) error {
+	evt := e.NewEvent(cmd, "orchestration.proposed_tasks")
+	evt.Status = "success"
+	evt.Payload = map[string]any{
+		"plan_candidates": planCandidates,
+		"derived_tasks":   derivedTasks,
+		"notes":           notes,
+	}
+	return e.EncodeEventCapped(evt)
+}
+
+// SendOrchestrationNeedsClarificationEvent sends an orchestration.needs_clarification event
+func (e *RealEventEmitter) SendOrchestrationNeedsClarificationEvent(cmd *protocol.Command, questions []string, notes string) error {
+	evt := e.NewEvent(cmd, "orchestration.needs_clarification")
+	evt.Status = "needs_input"
+	evt.Payload = map[string]any{
+		"questions": questions,
+		"notes":     notes,
+	}
+	return e.EncodeEventCapped(evt)
+}
+
+// SendOrchestrationPlanConflictEvent sends an orchestration.plan_conflict event
+func (e *RealEventEmitter) SendOrchestrationPlanConflictEvent(cmd *protocol.Command, candidates []map[string]any, reason string) error {
+	evt := e.NewEvent(cmd, "orchestration.plan_conflict")
+	evt.Status = "needs_input"
+	evt.Payload = map[string]any{
+		"candidates": candidates,
+		"reason":     reason,
 	}
 	return e.EncodeEventCapped(evt)
 }
@@ -193,6 +227,11 @@ func (m *MockEventEmitter) SendErrorEvent(cmd *protocol.Command, code, message s
 		"message": message,
 	}
 	m.events = append(m.events, evt)
+
+	// Return an error for version_mismatch to test error handling
+	if code == "version_mismatch" {
+		return fmt.Errorf("version_mismatch: %s", message)
+	}
 	return nil
 }
 
@@ -222,6 +261,49 @@ func (m *MockEventEmitter) SendLog(level, message string, fields map[string]any)
 		Timestamp: time.Now().UTC(),
 	}
 	m.logs = append(m.logs, log)
+	return nil
+}
+
+// SendOrchestrationProposedTasksEvent mocks orchestration.proposed_tasks event
+func (m *MockEventEmitter) SendOrchestrationProposedTasksEvent(cmd *protocol.Command, planCandidates []map[string]any, derivedTasks []map[string]any, notes string) error {
+	m.callLog = append(m.callLog, fmt.Sprintf("SendOrchestrationProposedTasksEvent(%d candidates, %d tasks)", len(planCandidates), len(derivedTasks)))
+
+	evt := m.NewEvent(cmd, "orchestration.proposed_tasks")
+	evt.Status = "success"
+	evt.Payload = map[string]any{
+		"plan_candidates": planCandidates,
+		"derived_tasks":   derivedTasks,
+		"notes":           notes,
+	}
+	m.events = append(m.events, evt)
+	return nil
+}
+
+// SendOrchestrationNeedsClarificationEvent mocks orchestration.needs_clarification event
+func (m *MockEventEmitter) SendOrchestrationNeedsClarificationEvent(cmd *protocol.Command, questions []string, notes string) error {
+	m.callLog = append(m.callLog, fmt.Sprintf("SendOrchestrationNeedsClarificationEvent(%d questions)", len(questions)))
+
+	evt := m.NewEvent(cmd, "orchestration.needs_clarification")
+	evt.Status = "needs_input"
+	evt.Payload = map[string]any{
+		"questions": questions,
+		"notes":     notes,
+	}
+	m.events = append(m.events, evt)
+	return nil
+}
+
+// SendOrchestrationPlanConflictEvent mocks orchestration.plan_conflict event
+func (m *MockEventEmitter) SendOrchestrationPlanConflictEvent(cmd *protocol.Command, candidates []map[string]any, reason string) error {
+	m.callLog = append(m.callLog, fmt.Sprintf("SendOrchestrationPlanConflictEvent(%d candidates)", len(candidates)))
+
+	evt := m.NewEvent(cmd, "orchestration.plan_conflict")
+	evt.Status = "needs_input"
+	evt.Payload = map[string]any{
+		"candidates": candidates,
+		"reason":     reason,
+	}
+	m.events = append(m.events, evt)
 	return nil
 }
 

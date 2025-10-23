@@ -1,275 +1,238 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/iambrandonn/lorch/internal/ndjson"
 	"github.com/iambrandonn/lorch/internal/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestIntegrationWorkstreams demonstrates how all interfaces work together
-func TestIntegrationWorkstreams(t *testing.T) {
-	// This test shows how the interfaces enable parallel development
-	// by allowing each workstream to be tested independently
+func TestLLMAgentNDJSONIO(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    slog.Default(),
+	}
 
-	t.Run("LLM_Caller_Integration", func(t *testing.T) {
-		// Workstream G: LLM CLI Caller
-		caller := NewMockLLMCaller()
-		caller.SetResponse("test prompt", `{
-			"plan_file": "PLAN.md",
-			"confidence": 0.95,
-			"tasks": [
-				{"id": "T-001", "title": "Test task", "files": ["test.go"]}
-			]
-		}`)
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
 
-		ctx := context.Background()
-		response, err := caller.Call(ctx, "test prompt")
-		require.NoError(t, err)
-		assert.Contains(t, response, "PLAN.md")
-		assert.Equal(t, 1, caller.CallCount())
-	})
+	// Create mock stdin with a command
+	cmd := protocol.Command{
+		Kind:          protocol.MessageKindCommand,
+		MessageID:     "msg-001",
+		CorrelationID: "corr-001",
+		TaskID:        "T-001",
+		IdempotencyKey: "ik-001",
+		To: protocol.AgentRef{
+			AgentType: protocol.AgentTypeOrchestration,
+		},
+		Action: protocol.ActionIntake,
+		Inputs: map[string]any{
+			"user_instruction": "Test instruction",
+		},
+		Version: protocol.Version{
+			SnapshotID: "snap-001",
+		},
+		Deadline: time.Now().Add(180 * time.Second),
+		Retry: protocol.Retry{
+			Attempt:     0,
+			MaxAttempts: 3,
+		},
+		Priority: 5,
+	}
 
-	t.Run("Receipt_Store_Integration", func(t *testing.T) {
-		// Workstream E: Idempotency Receipts
-		store := NewMockReceiptStore()
+	// Marshal command to JSON
+	cmdJSON, err := json.Marshal(cmd)
+	require.NoError(t, err)
 
-		// Simulate saving a receipt
-		receipt := &Receipt{
-			TaskID:         "T-001",
-			Step:           1,
-			IdempotencyKey: "ik-123",
-			Artifacts: []protocol.Artifact{
-				{Path: "test.go", SHA256: "sha256:abc", Size: 100},
-			},
-			Events:    []string{"event-1"},
-			CreatedAt: time.Now(),
+	// Create stdin with the command
+	stdin := strings.NewReader(string(cmdJSON) + "\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Run agent (this should succeed with mock orchestration response)
+	err = agent.Run(ctx, stdin, &stdout, &stderr)
+
+	// The agent should complete successfully with mock orchestration response
+	assert.NoError(t, err)
+
+	// Check that some output was produced (heartbeats, etc.)
+	output := stdout.String()
+	assert.NotEmpty(t, output)
+
+	// Verify output contains valid JSON lines
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, line := range lines {
+		if line != "" {
+			var msg map[string]any
+			err := json.Unmarshal([]byte(line), &msg)
+			assert.NoError(t, err, "Invalid JSON in output: %s", line)
 		}
-
-		err := store.SaveReceipt("/receipts/T-001/step-1.json", receipt)
-		require.NoError(t, err)
-
-		// Simulate idempotency check
-		found, path, err := store.FindReceiptByIK("T-001", "implement", "ik-123")
-		require.NoError(t, err)
-		assert.NotNil(t, found)
-		assert.Equal(t, "/receipts/T-001/step-1.json", path)
-	})
-
-	t.Run("FS_Provider_Integration", func(t *testing.T) {
-		// Workstream D: Security & Filesystem Utilities
-		provider := NewMockFSProvider()
-
-		// Simulate reading workspace files
-		provider.SetFile("/workspace/PLAN.md", "# Plan\n\n## Task 1\nImplement feature")
-		content, err := provider.ReadFileSafe("/workspace/PLAN.md", 1024)
-		require.NoError(t, err)
-		assert.Contains(t, content, "Plan")
-
-		// Simulate writing artifacts
-		artifact, err := provider.WriteArtifactAtomic("/workspace", "tasks/T-001.plan.json", []byte(`{"task": "T-001"}`))
-		require.NoError(t, err)
-		assert.Equal(t, "tasks/T-001.plan.json", artifact.Path)
-		assert.NotEmpty(t, artifact.SHA256)
-	})
-
-	t.Run("Event_Emitter_Integration", func(t *testing.T) {
-		// Workstream C: Event Builders & Error Helpers
-		emitter := NewMockEventEmitter()
-
-		cmd := &protocol.Command{
-			CorrelationID: "corr-1",
-			TaskID:        "T-001",
-			Version: protocol.Version{
-				SnapshotID: "snap-1",
-			},
-		}
-
-		// Simulate error handling
-		err := emitter.SendErrorEvent(cmd, "llm_call_failed", "LLM timeout")
-		require.NoError(t, err)
-
-		// Simulate artifact production
-		artifact := protocol.Artifact{
-			Path:   "tasks/T-001.plan.json",
-			SHA256: "sha256:abc123",
-			Size:   100,
-		}
-		err = emitter.SendArtifactProducedEvent(cmd, artifact)
-		require.NoError(t, err)
-
-		// Verify events
-		events := emitter.GetEvents()
-		assert.Len(t, events, 2)
-		assert.Equal(t, "error", events[0].Event)
-		assert.Equal(t, "artifact.produced", events[1].Event)
-	})
-
-	t.Run("Complete_Orchestration_Flow", func(t *testing.T) {
-		// This demonstrates how all interfaces work together
-		// for a complete orchestration flow
-
-		// Setup all interfaces
-		llmCaller := NewMockLLMCaller()
-		receiptStore := NewMockReceiptStore()
-		fsProvider := NewMockFSProvider()
-		eventEmitter := NewMockEventEmitter()
-
-		// Mock LLM response
-		llmCaller.SetResponse("orchestration prompt", `{
-			"plan_file": "PLAN.md",
-			"confidence": 0.95,
-			"tasks": [
-				{"id": "T-001", "title": "Implement feature", "files": ["src/feature.go"]}
-			],
-			"needs_clarification": false
-		}`)
-
-		// Mock workspace files
-		fsProvider.SetFile("/workspace/PLAN.md", "# Plan\n\n## Feature Implementation")
-
-		// Simulate orchestration flow
-		cmd := &protocol.Command{
-			CorrelationID: "corr-1",
-			TaskID:        "T-001",
-			Version: protocol.Version{
-				SnapshotID: "snap-1",
-			},
-		}
-
-		// 1. Check idempotency
-		found, _, err := receiptStore.FindReceiptByIK("T-001", "intake", "ik-123")
-		require.NoError(t, err)
-		assert.Nil(t, found) // No existing receipt
-
-		// 2. Read workspace files
-		content, err := fsProvider.ReadFileSafe("/workspace/PLAN.md", 1024)
-		require.NoError(t, err)
-		assert.Contains(t, content, "Plan")
-
-		// 3. Call LLM
-		ctx := context.Background()
-		response, err := llmCaller.Call(ctx, "orchestration prompt")
-		require.NoError(t, err)
-		assert.Contains(t, response, "PLAN.md")
-
-		// 4. Write artifacts
-		artifact, err := fsProvider.WriteArtifactAtomic("/workspace", "tasks/T-001.plan.json", []byte(response))
-		require.NoError(t, err)
-
-		// 5. Emit events
-		err = eventEmitter.SendArtifactProducedEvent(cmd, artifact)
-		require.NoError(t, err)
-
-		// 6. Save receipt for idempotency
-		receipt := &Receipt{
-			TaskID:         "T-001",
-			Step:           1,
-			IdempotencyKey: "ik-123",
-			Artifacts:     []protocol.Artifact{artifact},
-			Events:        []string{"event-1"},
-			CreatedAt:     time.Now(),
-		}
-		err = receiptStore.SaveReceipt("/receipts/T-001/step-1.json", receipt)
-		require.NoError(t, err)
-
-		// Verify all interfaces were used
-		assert.Equal(t, 1, llmCaller.CallCount())
-		assert.Len(t, eventEmitter.GetEvents(), 1)
-		assert.Len(t, receiptStore.GetCallLog(), 2) // FindReceiptByIK + SaveReceipt
-		assert.Len(t, fsProvider.GetReadLog(), 1)
-		assert.Len(t, fsProvider.GetWriteLog(), 1)
-	})
+	}
 }
 
-// TestInterfaceCompatibility ensures all interfaces are compatible
-func TestInterfaceCompatibility(t *testing.T) {
-	// This test ensures that all interfaces can be used together
-	// without type conflicts or missing methods
+func TestLLMAgentHeartbeatOutput(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    nil,
+	}
 
-	t.Run("Interface_Assignment", func(t *testing.T) {
-		// Test that all interfaces can be assigned to their interface types
-		var llmCaller LLMCaller = NewMockLLMCaller()
-		var receiptStore ReceiptStore = NewMockReceiptStore()
-		var fsProvider FSProvider = NewMockFSProvider()
-		var eventEmitter EventEmitter = NewMockEventEmitter()
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
 
-		// Test that they can be used
-		ctx := context.Background()
-		_, err := llmCaller.Call(ctx, "test")
-		require.NoError(t, err)
+	// Test heartbeat generation
+	var stdout bytes.Buffer
+	agent.encoder = ndjson.NewEncoder(&stdout, nil)
 
-		_, err = receiptStore.LoadReceipt("/test.json")
-		require.Error(t, err) // Expected - file doesn't exist
+	// Send a heartbeat
+	err = agent.sendHeartbeat(protocol.HeartbeatStatusReady, "")
+	require.NoError(t, err)
 
-		_, err = fsProvider.ReadFileSafe("/test.txt", 1024)
-		require.Error(t, err) // Expected - file doesn't exist
+	// Verify heartbeat output
+	output := stdout.String()
+	assert.NotEmpty(t, output)
 
-		cmd := &protocol.Command{
-			CorrelationID: "corr-1",
-			TaskID:        "T-001",
-			Version: protocol.Version{
-				SnapshotID: "snap-1",
-			},
-		}
+	// Parse heartbeat
+	var hb protocol.Heartbeat
+	err = json.Unmarshal([]byte(output), &hb)
+	require.NoError(t, err)
 
-		err = eventEmitter.SendErrorEvent(cmd, "test", "message")
-		require.NoError(t, err)
-	})
+	assert.Equal(t, protocol.MessageKindHeartbeat, hb.Kind)
+	assert.Equal(t, protocol.AgentTypeOrchestration, hb.Agent.AgentType)
+	assert.Equal(t, protocol.HeartbeatStatusReady, hb.Status)
+	assert.Equal(t, int64(1), hb.Seq)
+	assert.Greater(t, hb.PID, 0)
+	assert.GreaterOrEqual(t, hb.UptimeS, 0.0)
+	assert.NotEmpty(t, hb.LastActivityAt)
 }
 
-// TestWorkstreamDependencies demonstrates how workstreams depend on each other
-func TestWorkstreamDependencies(t *testing.T) {
-	t.Run("Dependency_Chain", func(t *testing.T) {
-		// Workstream A (NDJSON Core) -> Workstream C (Event Builders)
-		// Workstream C -> Workstream F (Orchestration Logic)
-		// Workstream D (FS Utils) -> Workstream H (Artifact Production)
-		// Workstream E (Receipts) -> Workstream F (Orchestration Logic)
+func TestLLMAgentCommandParsing(t *testing.T) {
+	// Test command parsing with various inputs
+	cmdJSON := `{
+		"kind": "command",
+		"message_id": "msg-001",
+		"correlation_id": "corr-001",
+		"task_id": "T-001",
+		"idempotency_key": "ik-001",
+		"to": {
+			"agent_type": "orchestration"
+		},
+		"action": "intake",
+		"inputs": {
+			"user_instruction": "Test instruction"
+		},
+		"version": {
+			"snapshot_id": "snap-001"
+		},
+		"deadline": "2025-12-31T23:59:59Z",
+		"retry": {
+			"attempt": 0,
+			"max_attempts": 3
+		},
+		"priority": 5
+	}`
 
-		// This test shows the dependency chain is properly designed
-		// Each workstream can be developed independently with mocks
+	var cmd protocol.Command
+	err := json.Unmarshal([]byte(cmdJSON), &cmd)
+	require.NoError(t, err)
 
-		// A -> C dependency
-		eventEmitter := NewMockEventEmitter()
-		cmd := &protocol.Command{
-			CorrelationID: "corr-1",
-			TaskID:        "T-001",
-			Version: protocol.Version{
-				SnapshotID: "snap-1",
-			},
-		}
+	assert.Equal(t, protocol.MessageKindCommand, cmd.Kind)
+	assert.Equal(t, "msg-001", cmd.MessageID)
+	assert.Equal(t, "corr-001", cmd.CorrelationID)
+	assert.Equal(t, "T-001", cmd.TaskID)
+	assert.Equal(t, "ik-001", cmd.IdempotencyKey)
+	assert.Equal(t, protocol.AgentTypeOrchestration, cmd.To.AgentType)
+	assert.Equal(t, protocol.ActionIntake, cmd.Action)
+	assert.Equal(t, "snap-001", cmd.Version.SnapshotID)
+	assert.Equal(t, 5, cmd.Priority)
+}
 
-		// C can be tested independently
-		err := eventEmitter.SendErrorEvent(cmd, "test_error", "test message")
-		require.NoError(t, err)
-		assert.Len(t, eventEmitter.GetEvents(), 1)
+func TestLLMAgentErrorHandling(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    slog.Default(),
+	}
 
-		// D -> H dependency
-		fsProvider := NewMockFSProvider()
-		artifact, err := fsProvider.WriteArtifactAtomic("/workspace", "test.txt", []byte("content"))
-		require.NoError(t, err)
-		assert.Equal(t, "test.txt", artifact.Path)
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
 
-		// E -> F dependency
-		receiptStore := NewMockReceiptStore()
-		receipt := &Receipt{
-			TaskID:         "T-001",
-			Step:           1,
-			IdempotencyKey: "ik-123",
-			Artifacts:     []protocol.Artifact{artifact},
-			Events:        []string{"event-1"},
-			CreatedAt:     time.Now(),
-		}
+	// Test with invalid JSON input
+	invalidJSON := `{"invalid": json}`
+	stdin := strings.NewReader(invalidJSON + "\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 
-		err = receiptStore.SaveReceipt("/receipts/T-001/step-1.json", receipt)
-		require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
 
-		// F can use all dependencies
-		found, _, err := receiptStore.FindReceiptByIK("T-001", "implement", "ik-123")
-		require.NoError(t, err)
-		assert.NotNil(t, found)
-	})
+	// This should fail due to invalid JSON
+	err = agent.Run(ctx, stdin, &stdout, &stderr)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to decode command")
+}
+
+func TestLLMAgentEmptyInput(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    nil,
+	}
+
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Test with empty input (EOF)
+	stdin := strings.NewReader("")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	// This should return nil (clean shutdown) on EOF
+	err = agent.Run(ctx, stdin, &stdout, &stderr)
+	assert.NoError(t, err) // EOF should be handled gracefully
+}
+
+func TestLLMAgentContextCancellation(t *testing.T) {
+	cfg := &AgentConfig{
+		Role:      protocol.AgentTypeOrchestration,
+		LLMCLI:    "claude",
+		Workspace: "/tmp/test",
+		Logger:    nil,
+	}
+
+	agent, err := NewLLMAgent(cfg)
+	require.NoError(t, err)
+
+	// Test with cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	stdin := strings.NewReader("")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	// This should return nil due to context cancellation
+	err = agent.Run(ctx, stdin, &stdout, &stderr)
+	assert.NoError(t, err) // Context cancellation should be handled gracefully
 }

@@ -1,8 +1,12 @@
 package main
 
 import (
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 
+	"github.com/iambrandonn/lorch/internal/ndjson"
 	"github.com/iambrandonn/lorch/internal/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -227,4 +231,313 @@ func TestMockEventEmitterLogFields(t *testing.T) {
 	assert.Equal(t, "value1", log.Fields["key1"])
 	assert.Equal(t, 42, log.Fields["key2"])
 	assert.Equal(t, true, log.Fields["key3"])
+}
+
+func TestMockEventEmitterOrchestrationEvents(t *testing.T) {
+	emitter := NewMockEventEmitter()
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test SendOrchestrationProposedTasksEvent
+	planCandidates := []map[string]any{
+		{"path": "PLAN.md", "confidence": 0.9},
+		{"path": "docs/plan_v2.md", "confidence": 0.7},
+	}
+	derivedTasks := []map[string]any{
+		{"id": "T-001-1", "title": "Task 1", "files": []string{"src/a.js"}},
+		{"id": "T-001-2", "title": "Task 2", "files": []string{"src/b.js"}},
+	}
+	notes := "Found 2 plan candidates and derived 2 tasks"
+
+	err := emitter.SendOrchestrationProposedTasksEvent(cmd, planCandidates, derivedTasks, notes)
+	require.NoError(t, err)
+
+	// Test SendOrchestrationNeedsClarificationEvent
+	questions := []string{
+		"Which plan file should be used?",
+		"Should we implement phases A and B together?",
+	}
+	clarificationNotes := "Ambiguous instruction; multiple plausible interpretations"
+
+	err = emitter.SendOrchestrationNeedsClarificationEvent(cmd, questions, clarificationNotes)
+	require.NoError(t, err)
+
+	// Test SendOrchestrationPlanConflictEvent
+	candidates := []map[string]any{
+		{"path": "PLAN.md", "confidence": 0.81},
+		{"path": "docs/plan_v2.md", "confidence": 0.80},
+	}
+	reason := "Two high-confidence plans diverge in scope; human selection required."
+
+	err = emitter.SendOrchestrationPlanConflictEvent(cmd, candidates, reason)
+	require.NoError(t, err)
+
+	// Verify events were recorded
+	events := emitter.GetEvents()
+	assert.Len(t, events, 3)
+
+	// Check proposed tasks event
+	proposedEvent := events[0]
+	assert.Equal(t, "orchestration.proposed_tasks", proposedEvent.Event)
+	assert.Equal(t, "success", proposedEvent.Status)
+	assert.Equal(t, "corr-1", proposedEvent.CorrelationID)
+	assert.Equal(t, "T-001", proposedEvent.TaskID)
+	assert.Equal(t, "snap-1", proposedEvent.ObservedVersion.SnapshotID)
+	assert.Len(t, proposedEvent.Payload["plan_candidates"], 2)
+	assert.Len(t, proposedEvent.Payload["derived_tasks"], 2)
+	assert.Equal(t, notes, proposedEvent.Payload["notes"])
+
+	// Check needs clarification event
+	clarificationEvent := events[1]
+	assert.Equal(t, "orchestration.needs_clarification", clarificationEvent.Event)
+	assert.Equal(t, "needs_input", clarificationEvent.Status)
+	assert.Len(t, clarificationEvent.Payload["questions"], 2)
+	assert.Equal(t, clarificationNotes, clarificationEvent.Payload["notes"])
+
+	// Check plan conflict event
+	conflictEvent := events[2]
+	assert.Equal(t, "orchestration.plan_conflict", conflictEvent.Event)
+	assert.Equal(t, "needs_input", conflictEvent.Status)
+	assert.Len(t, conflictEvent.Payload["candidates"], 2)
+	assert.Equal(t, reason, conflictEvent.Payload["reason"])
+
+	// Verify call logs
+	callLog := emitter.GetCallLog()
+	assert.Contains(t, callLog, "SendOrchestrationProposedTasksEvent(2 candidates, 2 tasks)")
+	assert.Contains(t, callLog, "SendOrchestrationNeedsClarificationEvent(2 questions)")
+	assert.Contains(t, callLog, "SendOrchestrationPlanConflictEvent(2 candidates)")
+}
+
+func TestMockEventEmitterOrchestrationEventValidation(t *testing.T) {
+	emitter := NewMockEventEmitter()
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test with empty data
+	err := emitter.SendOrchestrationProposedTasksEvent(cmd, []map[string]any{}, []map[string]any{}, "")
+	require.NoError(t, err)
+
+	err = emitter.SendOrchestrationNeedsClarificationEvent(cmd, []string{}, "")
+	require.NoError(t, err)
+
+	err = emitter.SendOrchestrationPlanConflictEvent(cmd, []map[string]any{}, "")
+	require.NoError(t, err)
+
+	// Verify events were still recorded
+	events := emitter.GetEvents()
+	assert.Len(t, events, 3)
+
+	// Check that empty data is handled gracefully
+	for _, event := range events {
+		assert.NotNil(t, event.Payload)
+		assert.Equal(t, "corr-1", event.CorrelationID)
+		assert.Equal(t, "T-001", event.TaskID)
+		assert.Equal(t, "snap-1", event.ObservedVersion.SnapshotID)
+	}
+}
+
+func TestMockEventEmitterMessageSizeCapping(t *testing.T) {
+	emitter := NewMockEventEmitter()
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test with large payload that would exceed size limits
+	largePlanCandidates := make([]map[string]any, 1000)
+	for i := 0; i < 1000; i++ {
+		largePlanCandidates[i] = map[string]any{
+			"path":       fmt.Sprintf("plan_%d.md", i),
+			"confidence": 0.5 + float64(i%50)/100.0,
+			"content":    strings.Repeat("x", 1000), // 1KB per candidate
+		}
+	}
+
+	largeDerivedTasks := make([]map[string]any, 1000)
+	for i := 0; i < 1000; i++ {
+		largeDerivedTasks[i] = map[string]any{
+			"id":    fmt.Sprintf("T-001-%d", i),
+			"title": fmt.Sprintf("Task %d", i),
+			"files": []string{fmt.Sprintf("src/file_%d.js", i)},
+			"notes": strings.Repeat("y", 500), // 500 bytes per task
+		}
+	}
+
+	// This should trigger size capping in the real implementation
+	err := emitter.SendOrchestrationProposedTasksEvent(cmd, largePlanCandidates, largeDerivedTasks, "Large payload test")
+	require.NoError(t, err)
+
+	// Verify event was recorded (mock doesn't actually cap, but real implementation would)
+	events := emitter.GetEvents()
+	assert.Len(t, events, 1)
+
+	event := events[0]
+	assert.Equal(t, "orchestration.proposed_tasks", event.Event)
+	assert.Equal(t, "success", event.Status)
+	assert.Len(t, event.Payload["plan_candidates"], 1000)
+	assert.Len(t, event.Payload["derived_tasks"], 1000)
+}
+
+func TestMockEventEmitterErrorCodes(t *testing.T) {
+	emitter := NewMockEventEmitter()
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test various error codes as specified in the plan
+	errorCodes := []string{
+		"invalid_inputs",
+		"llm_call_failed",
+		"invalid_llm_response",
+		"version_mismatch",
+		"file_read_failed",
+		"artifact_write_failed",
+		"receipt_lookup_failed",
+	}
+
+	for i, code := range errorCodes {
+		message := fmt.Sprintf("Test error message %d", i)
+		err := emitter.SendErrorEvent(cmd, code, message)
+		if code == "version_mismatch" {
+			// version_mismatch returns an error in the mock
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "version_mismatch")
+		} else {
+			require.NoError(t, err)
+		}
+	}
+
+	// Verify all error events were recorded
+	events := emitter.GetEvents()
+	assert.Len(t, events, len(errorCodes))
+
+	// Check each error event
+	for i, event := range events {
+		assert.Equal(t, "error", event.Event)
+		assert.Equal(t, "failed", event.Status)
+		assert.Equal(t, errorCodes[i], event.Payload["code"])
+		assert.Equal(t, fmt.Sprintf("Test error message %d", i), event.Payload["message"])
+		assert.Equal(t, "corr-1", event.CorrelationID)
+		assert.Equal(t, "T-001", event.TaskID)
+		assert.Equal(t, "snap-1", event.ObservedVersion.SnapshotID)
+	}
+
+	// Verify error log
+	errorLog := emitter.GetErrorLog()
+	assert.Len(t, errorLog, len(errorCodes))
+	for i, code := range errorCodes {
+		expectedLog := fmt.Sprintf("SendErrorEvent(%s, Test error message %d)", code, i)
+		assert.Contains(t, errorLog, expectedLog)
+	}
+}
+
+func TestRealEventEmitterSizeCapping(t *testing.T) {
+	// Create a buffer to capture output
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger)
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test with a payload that exceeds the 256 KiB limit
+	largePayload := make(map[string]any)
+	largePayload["data"] = strings.Repeat("x", 300*1024) // 300 KiB of data
+
+	evt := emitter.NewEvent(cmd, "test.large_event")
+	evt.Payload = largePayload
+
+	// This should trigger size capping
+	err := emitter.EncodeEventCapped(evt)
+	require.NoError(t, err)
+
+	// Verify the output was capped
+	output := buf.String()
+	assert.Contains(t, output, "_truncated")
+	assert.NotContains(t, output, strings.Repeat("x", 300*1024))
+}
+
+func TestRealEventEmitterProtocolCompliance(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger)
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test that all required fields are present
+	evt := emitter.NewEvent(cmd, "test.event")
+
+	// Verify required fields
+	assert.Equal(t, protocol.MessageKindEvent, evt.Kind)
+	assert.NotEmpty(t, evt.MessageID)
+	assert.Equal(t, "corr-1", evt.CorrelationID)
+	assert.Equal(t, "T-001", evt.TaskID)
+	assert.Equal(t, protocol.AgentTypeOrchestration, evt.From.AgentType)
+	assert.Equal(t, "test.event", evt.Event)
+	assert.NotZero(t, evt.OccurredAt)
+	assert.NotNil(t, evt.ObservedVersion)
+	assert.Equal(t, "snap-1", evt.ObservedVersion.SnapshotID)
+}
+
+func TestRealEventEmitterErrorEventStructure(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	encoder := ndjson.NewEncoder(&buf, logger)
+
+	emitter := NewRealEventEmitter(encoder, logger)
+
+	cmd := &protocol.Command{
+		CorrelationID: "corr-1",
+		TaskID:        "T-001",
+		Version: protocol.Version{
+			SnapshotID: "snap-1",
+		},
+	}
+
+	// Test error event structure
+	err := emitter.SendErrorEvent(cmd, "test_error", "test message")
+	require.NoError(t, err)
+
+	// Verify the output contains proper error structure
+	output := buf.String()
+	assert.Contains(t, output, `"event":"error"`)
+	assert.Contains(t, output, `"status":"failed"`)
+	assert.Contains(t, output, `"code":"test_error"`)
+	assert.Contains(t, output, `"message":"test message"`)
 }
