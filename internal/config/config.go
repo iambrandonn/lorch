@@ -64,6 +64,16 @@ type Task struct {
 }
 
 // GenerateDefault creates a new Config with default values matching MASTER-SPEC §8.2
+//
+// IMPORTANT: The default agent commands use "claude" as a placeholder. These must be
+// replaced with actual NDJSON-speaking agent implementations before use.
+//
+// For testing, build and use mockagent:
+//   go build -o ./mockagent ./cmd/mockagent
+//   Then update agent commands to: ["./mockagent", "-type", "{role}"]
+//
+// For production, configure real agent shims that speak the NDJSON protocol.
+// See docs/AGENT-SHIMS.md for details.
 func GenerateDefault() *Config {
 	return &Config{
 		Version:       "1.0",

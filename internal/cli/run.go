@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -406,7 +407,14 @@ func runIntakeFlow(cmd *cobra.Command, cfg *config.Config, workspaceRoot string,
 		return nil, fmt.Errorf("failed to create orchestration supervisor: %w", err)
 	}
 	if err := orchSupervisor.Start(ctx); err != nil {
-		return nil, fmt.Errorf("failed to start orchestration agent: %w", err)
+		return nil, fmt.Errorf("failed to start orchestration agent: %w\n\n"+
+			"The orchestration agent command failed to start. Common causes:\n"+
+			"  - Command not found or not executable\n"+
+			"  - Command doesn't speak NDJSON protocol\n"+
+			"  - Command crashed on startup\n"+
+			"\n"+
+			"Check logs/orchestration/%s-stderr.log for agent diagnostics.\n"+
+			"See docs/AGENT-SHIMS.md for agent configuration details.", err, runID)
 	}
 	defer orchSupervisor.Stop(context.Background())
 
@@ -1667,7 +1675,14 @@ func setupExecutionEnvironment(
 
 	// Start agents
 	if err := builder.Start(ctx); err != nil {
-		return nil, fmt.Errorf("failed to start builder: %w", err)
+		return nil, fmt.Errorf("failed to start builder agent: %w\n\n"+
+			"The builder agent command failed to start. Common causes:\n"+
+			"  - Command not found or not executable\n"+
+			"  - Command doesn't speak NDJSON protocol\n"+
+			"  - Command crashed on startup\n"+
+			"\n"+
+			"Check logs/builder/%s-stderr.log for agent diagnostics.\n"+
+			"See docs/AGENT-SHIMS.md for agent configuration details.", err, runID)
 	}
 	if err := startAgentStderrConsumer(ctx, builder, protocol.AgentTypeBuilder, workspaceRoot, runID, outputWriter); err != nil {
 		builder.Stop(context.Background())
@@ -1722,6 +1737,27 @@ func realAgentSupervisorFactory(agentCfg *config.AgentConfig, agentType protocol
 		return nil, fmt.Errorf("agent config for %s is nil", agentType)
 	}
 
+	// Validate command exists and is executable
+	if len(agentCfg.Cmd) == 0 {
+		return nil, fmt.Errorf("agent %s has no command configured", agentType)
+	}
+
+	cmdPath := agentCfg.Cmd[0]
+	_, err := exec.LookPath(cmdPath)
+	if err != nil {
+		return nil, fmt.Errorf("agent '%s' command not found: %s\n\n"+
+			"The configured command '%s' is not executable or not in PATH.\n"+
+			"\n"+
+			"For testing, build mockagent:\n"+
+			"  go build -o ./mockagent ./cmd/mockagent\n"+
+			"\n"+
+			"Then update your lorch.json agent configuration to:\n"+
+			"  \"cmd\": [\"./mockagent\", \"-type\", \"%s\"]\n"+
+			"\n"+
+			"See docs/AGENT-SHIMS.md for more details on agent configuration.",
+			agentType, cmdPath, cmdPath, agentType)
+	}
+
 	return supervisor.NewAgentSupervisor(agentType, agentCfg.Cmd, agentCfg.Env, logger), nil
 }
 
@@ -1767,6 +1803,22 @@ func loadOrCreateConfig(configPath string, logger *slog.Logger) (*config.Config,
 	}
 
 	logger.Info("created default config", "path", defaultPath)
+
+	// Warn user about placeholder agent commands
+	fmt.Fprintf(os.Stderr, "\n"+
+		"⚠️  WARNING: Default config created with placeholder agent commands.\n"+
+		"\n"+
+		"The agents are configured to use 'claude' which likely won't work.\n"+
+		"You need to configure actual NDJSON-speaking agents before running lorch.\n"+
+		"\n"+
+		"Quick start for testing:\n"+
+		"  1. Build mockagent:  go build -o ./mockagent ./cmd/mockagent\n"+
+		"  2. Edit %s\n"+
+		"  3. Change all 'cmd': [\"claude\"] to 'cmd': [\"./mockagent\", \"-type\", \"{role}\"]\n"+
+		"\n"+
+		"See docs/AGENT-SHIMS.md for details.\n"+
+		"\n", defaultPath)
+
 	return cfg, defaultPath, nil
 }
 
