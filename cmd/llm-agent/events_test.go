@@ -420,10 +420,10 @@ func TestMockEventEmitterErrorCodes(t *testing.T) {
 	for i, code := range errorCodes {
 		message := fmt.Sprintf("Test error message %d", i)
 		err := emitter.SendErrorEvent(cmd, code, message)
-		if code == "version_mismatch" {
-			// version_mismatch returns an error in the mock
+		if code == "version_mismatch" || code == "llm_call_failed" || code == "invalid_inputs" {
+			// These error codes return an error in the mock
 			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "version_mismatch")
+			assert.Contains(t, err.Error(), code)
 		} else {
 			require.NoError(t, err)
 		}

@@ -133,6 +133,7 @@ func (r *RealLLMCaller) Call(ctx context.Context, prompt string) (string, error)
 // MockLLMCaller implements LLMCaller for testing
 type MockLLMCaller struct {
 	responses map[string]string
+	errors    map[string]error
 	callCount int
 }
 
@@ -140,6 +141,7 @@ type MockLLMCaller struct {
 func NewMockLLMCaller() *MockLLMCaller {
 	return &MockLLMCaller{
 		responses: make(map[string]string),
+		errors:    make(map[string]error),
 		callCount: 0,
 	}
 }
@@ -147,6 +149,11 @@ func NewMockLLMCaller() *MockLLMCaller {
 // SetResponse sets a mock response for a given prompt
 func (m *MockLLMCaller) SetResponse(prompt, response string) {
 	m.responses[prompt] = response
+}
+
+// SetError sets a mock error for a given prompt
+func (m *MockLLMCaller) SetError(prompt string, err error) {
+	m.errors[prompt] = err
 }
 
 // CallCount returns the number of times Call has been invoked
@@ -158,7 +165,23 @@ func (m *MockLLMCaller) CallCount() int {
 func (m *MockLLMCaller) Call(ctx context.Context, prompt string) (string, error) {
 	m.callCount++
 
+	// Check for exact error match first
+	if err, exists := m.errors[prompt]; exists {
+		return "", err
+	}
+
+	// Check for wildcard error
+	if err, exists := m.errors[""]; exists {
+		return "", err
+	}
+
+	// Check for exact response match
 	if response, exists := m.responses[prompt]; exists {
+		return response, nil
+	}
+
+	// Check for empty string key (wildcard)
+	if response, exists := m.responses[""]; exists {
 		return response, nil
 	}
 

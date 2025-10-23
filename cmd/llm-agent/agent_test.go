@@ -143,13 +143,28 @@ func TestLLMAgentCommandRouting(t *testing.T) {
 	agent, err := NewLLMAgent(cfg)
 	require.NoError(t, err)
 
-	// Set up mock event emitter for testing
+	// Set up mock components for testing
 	agent.eventEmitter = NewMockEventEmitter()
+	agent.llmCaller = NewMockLLMCaller()
+	agent.receiptStore = NewMockReceiptStore()
+	agent.fsProvider = NewMockFSProvider()
 
 	// Test orchestration command
 	cmd := &protocol.Command{
 		Action: protocol.ActionIntake,
 		TaskID: "T-001",
+		Inputs: map[string]any{
+			"user_instruction": "Test instruction",
+			"discovery": map[string]any{
+				"root": "/workspace",
+				"strategy": "file_search",
+				"search_paths": []string{"/workspace"},
+				"generated_at": "2025-01-01T00:00:00Z",
+				"candidates": []map[string]any{
+					{"path": "PLAN.md", "score": 0.9},
+				},
+			},
+		},
 		Version: protocol.Version{
 			SnapshotID: "snap-001",
 		},

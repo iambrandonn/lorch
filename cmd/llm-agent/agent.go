@@ -176,29 +176,13 @@ func (a *LLMAgent) handleCommand(cmd *protocol.Command) error {
 
 // handleOrchestration handles orchestration-specific commands
 func (a *LLMAgent) handleOrchestration(cmd *protocol.Command) error {
-	// TODO: Implement orchestration logic
-	// This is a placeholder that will be implemented by workstream F
-	a.config.Logger.Info("handling orchestration command", "action", cmd.Action)
-
 	// Check if eventEmitter is set up (it's only set up in Run method)
 	if a.eventEmitter == nil {
 		return fmt.Errorf("eventEmitter not initialized - agent not running")
 	}
 
-	// For now, emit a simple success event
-	evt := a.eventEmitter.NewEvent(cmd, "orchestration.proposed_tasks")
-	evt.Status = "success"
-	evt.Payload = map[string]any{
-		"plan_candidates": []map[string]any{
-			{"path": "PLAN.md", "confidence": 0.9},
-		},
-		"derived_tasks": []map[string]any{
-			{"id": "T-001", "title": "Mock task", "files": []string{"test.go"}},
-		},
-		"notes": "Mock orchestration response",
-	}
-
-	return a.eventEmitter.EncodeEventCapped(evt)
+	// Delegate to the orchestration logic
+	return a.handleOrchestrationLogic(cmd)
 }
 
 // setStatus updates the agent status and activity timestamp

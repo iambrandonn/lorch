@@ -415,9 +415,9 @@ func (m *MockEventEmitter) SendErrorEvent(cmd *protocol.Command, code, message s
 	}
 	m.events = append(m.events, evt)
 
-	// Return an error for version_mismatch to test error handling
-	if code == "version_mismatch" {
-		return fmt.Errorf("version_mismatch: %s", message)
+	// Return an error for critical failures to test error handling
+	if code == "version_mismatch" || code == "llm_call_failed" || code == "invalid_inputs" {
+		return fmt.Errorf("%s: %s", code, message)
 	}
 	return nil
 }
