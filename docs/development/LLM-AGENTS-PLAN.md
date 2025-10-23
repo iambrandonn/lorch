@@ -2102,3 +2102,117 @@ Apply the same pattern to other emitters (e.g., `sendProposedTasksEvent`, `sendP
 - internal/protocol - Protocol types
 - docs/AGENT-SHIMS.md - Agent interface docs
 - docs/development/llm-agents-plan-review-1.md - Review feedback incorporated
+
+---
+
+## Parallel Workstreams (for Implementation)
+
+This section divides the plan into independent workstreams with clear interfaces so multiple contributors can implement in parallel. Each workstream lists scope, inputs/outputs, dependencies, and completion criteria. Mocks/stubs are specified to remove hard dependencies and maximize parallelism.
+
+### A. NDJSON Core & CLI Scaffold
+- Scope: `cmd/llm-agent/main.go`, agent construction, flag/env parsing, NDJSON encoder/decoder wiring.
+- Inputs/Outputs: stdin/stdout; creates `LLMAgent` with injected configs.
+- Dependencies: None.
+- Done: Agent starts, reads/writes NDJSON no-ops, exits cleanly.
+
+### B. Heartbeats & Liveness
+- Scope: `heartbeatLoop`, `sendHeartbeat`, state fields (`startTime`, `hbSeq`, `currentStatus`, `lastActivityAt`).
+- Inputs/Outputs: Emits `heartbeat` envelopes every 10s.
+- Dependencies: A (encoder); no functional dependency on other workstreams.
+- Done: Correct schema fields; `starting → ready → busy → ready`; continues during long ops.
+
+### C. Event Builders & Error Helpers
+- Scope: `newEvent()`, `sendErrorEvent()`, `encodeEventCapped()`.
+- Inputs/Outputs: Emits `event` with required fields; caps message size.
+- Dependencies: A; used by all emitters (F,H,I,J,K).
+- Done: All events pass schema; capped under 256 KiB with graceful truncation.
+
+### D. Security & Filesystem Utilities
+- Scope: `resolveWorkspacePath()`, restrictive perms (0600/0700), safe reads.
+- Inputs/Outputs: Canonical absolute paths; read limits.
+- Dependencies: None; used by H,K.
+- Done: Symlink-safe resolution; rejects escapes; tests for traversal.
+
+### E. Idempotency Receipts & IK Index
+- Scope: Receipt struct/load/save; directory scan by IK; optional by-IK index.
+- Inputs/Outputs: `/receipts/<task>/<action>-<step>.json`, optional `/index/by-ik/*.json`.
+- Dependencies: C (error events), D (paths), A (I/O).
+- Done: Repeat IK replays without LLM; tests cover replay, index fallback.
+
+### F. Orchestration Logic (intake + task_discovery)
+- Scope: Parse inputs; build prompt; normalize results; emit `proposed_tasks | needs_clarification | plan_conflict`.
+- Inputs/Outputs: Uses C for events; reads files via D; optional artifacts via H; size guard via I.
+- Dependencies: C,D; can stub G (LLM) with mock to proceed.
+- Done: Unit tests on prompt building/JSON extraction; emits correct events.
+
+### G. LLM CLI Caller
+- Scope: Subprocess management, timeouts, size limits, stderr passthrough.
+- Inputs/Outputs: `callLLM(ctx, cfg, prompt) -> string`.
+- Dependencies: None; F consumes this via interface; provide mock script for tests.
+- Done: Timeout/size limit tests; error propagation verified.
+
+### H. Artifact Production & Size Caps
+- Scope: Atomic writes, checksums, `artifact.produced`; size cap enforcement.
+- Inputs/Outputs: Artifact files + events.
+- Dependencies: C (events), D (paths).
+- Done: Checksums match; oversize rejected; tests pass.
+
+### I. Event Size Guard & Truncation Strategy
+- Scope: Guard for large `proposed_tasks` payloads; artifact-ref fallback; deterministic truncation.
+- Inputs/Outputs: Uses C’s `encodeEventCapped`; optional H for full payload artifact.
+- Dependencies: C,H.
+- Done: Oversize cases handled; schema-safe truncation proven in tests.
+
+### J. Version Snapshot Tracking
+- Scope: Record `firstObservedSnapshotID`; emit `version_mismatch` on change.
+- Inputs/Outputs: Error event via C; `observed_version` echoed on all events.
+- Dependencies: C.
+- Done: Mismatch test passes; echo verified.
+
+### K. Testing & Schemas
+- Scope: Unit tests (builders, receipts, path safety), schema validation for `event|heartbeat|log`, integration with mock LLM, E2E harness.
+- Inputs/Outputs: Uses repo schemas under `/schemas/v1`.
+- Dependencies: A–J test in isolation with mocks; integration tests gated on F,G,H.
+- Done: Green across unit, schema, integration, and negative tests (oversize, invalid enums).
+
+### L. Logging & Redaction
+- Scope: `sendLog`, `redactSecrets`, concise diagnostics for major steps.
+- Inputs/Outputs: `log` envelopes with redacted fields.
+- Dependencies: A,C.
+- Done: Redaction tests; logs remain under message cap.
+
+---
+
+### Interfaces and Stubs (to enable parallel work)
+- LLM interface: define `type LLMCaller func(ctx context.Context, cfg LLMConfig, prompt string) (string, error)`; F depends on this, G provides real, tests inject mock.
+- Receipt store: `loadReceipt(path)`, `saveReceipt(path, receipt)`, `findReceiptByIK(task, action, ik)`; E provides, F consumes.
+- FS utils: `resolveWorkspacePath`, `readFileSafe`, `writeArtifactAtomic`; D/H provide, F consumes.
+- Event emitters: `newEvent`, `encodeEventCapped`, `sendErrorEvent`; C provides, all consume.
+
+---
+
+### Dependency Gates (lightweight)
+- Minimal gate to integrate: A,C ready → B,L can ship; D ready → H can ship; C,D,E ready → F can emit with mock G; G can land independently; I can land once C and (optionally) H exist; J can land anytime after C; K can run progressively.
+
+---
+
+### Ownership Template (fill-in)
+- A: Owner ___
+- B: Owner ___
+- C: Owner ___
+- D: Owner ___
+- E: Owner ___
+- F: Owner ___
+- G: Owner ___
+- H: Owner ___
+- I: Owner ___
+- J: Owner ___
+- K: Owner ___
+- L: Owner ___
+
+---
+
+### Merge & Validation Order (suggested)
+1) A,C → B,L → D → E → G → H → I → F → J → K (full suite)
+2) After each merge: run schema tests; keep NDJSON size guard on.
+
