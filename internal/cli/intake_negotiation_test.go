@@ -661,9 +661,10 @@ func newTestLogger() *slog.Logger {
 }
 
 type fakeOrchestrationSupervisor struct {
-	events     chan *protocol.Event
-	heartbeats chan *protocol.Heartbeat
-	logs       chan *protocol.Log
+	events      chan *protocol.Event
+	heartbeats  chan *protocol.Heartbeat
+	logs        chan *protocol.Log
+	stderrLines chan string
 
 	mu       sync.Mutex
 	commands []*protocol.Command
@@ -677,9 +678,10 @@ type fakeOrchestrationSupervisor struct {
 
 func newFakeOrchestrationSupervisor() *fakeOrchestrationSupervisor {
 	return &fakeOrchestrationSupervisor{
-		events:     make(chan *protocol.Event, 10),
-		heartbeats: make(chan *protocol.Heartbeat, 1),
-		logs:       make(chan *protocol.Log, 1),
+		events:      make(chan *protocol.Event, 10),
+		heartbeats:  make(chan *protocol.Heartbeat, 1),
+		logs:        make(chan *protocol.Log, 1),
+		stderrLines: make(chan string, 10),
 	}
 }
 
@@ -692,6 +694,7 @@ func (f *fakeOrchestrationSupervisor) Stop(context.Context) error {
 		close(f.events)
 		close(f.heartbeats)
 		close(f.logs)
+		close(f.stderrLines)
 	})
 	return nil
 }
@@ -718,6 +721,10 @@ func (f *fakeOrchestrationSupervisor) Heartbeats() <-chan *protocol.Heartbeat {
 
 func (f *fakeOrchestrationSupervisor) Logs() <-chan *protocol.Log {
 	return f.logs
+}
+
+func (f *fakeOrchestrationSupervisor) StderrLines() <-chan string {
+	return f.stderrLines
 }
 
 func (f *fakeOrchestrationSupervisor) emit(evt *protocol.Event) {

@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -36,6 +37,7 @@ type AgentSupervisor struct {
 	events     chan *protocol.Event
 	heartbeats chan *protocol.Heartbeat
 	logs       chan *protocol.Log
+	stderrLines chan string
 }
 
 // NewAgentSupervisor creates a new agent supervisor
@@ -46,13 +48,14 @@ func NewAgentSupervisor(
 	logger *slog.Logger,
 ) *AgentSupervisor {
 	return &AgentSupervisor{
-		agentType:  agentType,
-		cmd:        cmd,
-		env:        env,
-		logger:     logger,
-		events:     make(chan *protocol.Event, 100),
-		heartbeats: make(chan *protocol.Heartbeat, 10),
-		logs:       make(chan *protocol.Log, 50),
+		agentType:   agentType,
+		cmd:         cmd,
+		env:         env,
+		logger:      logger,
+		events:      make(chan *protocol.Event, 100),
+		heartbeats:  make(chan *protocol.Heartbeat, 10),
+		logs:        make(chan *protocol.Log, 50),
+		stderrLines: make(chan string, 100),
 	}
 }
 
@@ -208,6 +211,11 @@ func (s *AgentSupervisor) Logs() <-chan *protocol.Log {
 	return s.logs
 }
 
+// StderrLines returns the channel for receiving stderr output from the agent
+func (s *AgentSupervisor) StderrLines() <-chan string {
+	return s.stderrLines
+}
+
 // IsRunning returns true if the agent is running
 func (s *AgentSupervisor) IsRunning() bool {
 	s.mu.Lock()
@@ -295,26 +303,41 @@ func (s *AgentSupervisor) readStderr(ctx context.Context) {
 		return
 	}
 
-	buf := make([]byte, 4096)
-	for {
+	defer close(s.stderrLines)
+
+	// Use a scanner to read line-by-line
+	scanner := bufio.NewScanner(stderr)
+	// Set a larger buffer size to handle long lines
+	scanner.Buffer(make([]byte, 4096), 1024*1024) // 1MB max line length
+
+	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
 
-		n, err := stderr.Read(buf)
-		if n > 0 {
-			// Log stderr output
-			s.logger.Info("agent stderr",
-				"type", s.agentType,
-				"output", string(buf[:n]))
-		}
-		if err != nil {
-			if err != io.EOF {
-				s.logger.Error("error reading stderr", "type", s.agentType, "error", err)
-			}
+		line := scanner.Text()
+
+		// Still log for debugging purposes
+		s.logger.Debug("agent stderr",
+			"type", s.agentType,
+			"line", line)
+
+		// Send line to channel for CLI consumption
+		select {
+		case s.stderrLines <- line:
+		case <-ctx.Done():
 			return
+		default:
+			// If channel is full, skip (shouldn't happen with buffered channel)
+			s.logger.Warn("stderr channel full, dropping line", "type", s.agentType)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		if err != io.EOF {
+			s.logger.Error("error reading stderr", "type", s.agentType, "error", err)
 		}
 	}
 }

@@ -38,6 +38,7 @@ type agentSupervisor interface {
 	Events() <-chan *protocol.Event
 	Heartbeats() <-chan *protocol.Heartbeat
 	Logs() <-chan *protocol.Log
+	StderrLines() <-chan string
 }
 
 var agentSupervisorFactory = realAgentSupervisorFactory
@@ -193,7 +194,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	// Set up execution environment (agents + scheduler)
-	env, err := setupExecutionEnvironment(ctx, cfg, workspaceRoot, snap.SnapshotID, evtLog, logger)
+	env, err := setupExecutionEnvironment(ctx, cfg, workspaceRoot, snap.SnapshotID, runID, evtLog, outWriter, logger)
 	if err != nil {
 		return err
 	}
@@ -388,6 +389,18 @@ func runIntakeFlow(cmd *cobra.Command, cfg *config.Config, workspaceRoot string,
 	}
 	defer intakeLog.Close()
 
+	// Create stderr log file for agent diagnostic output - follows spec structure: /logs/<agent>/<run_id>
+	orchLogDir := filepath.Join(workspaceRoot, "logs", "orchestration")
+	stderrLogPath := filepath.Join(orchLogDir, fmt.Sprintf("%s-stderr.log", runID))
+	if err := os.MkdirAll(orchLogDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create orchestration log directory: %w", err)
+	}
+	stderrLogFile, err := os.Create(stderrLogPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stderr log file: %w", err)
+	}
+	defer stderrLogFile.Close()
+
 	orchSupervisor, err := agentSupervisorFactory(cfg.Agents.Orchestration, protocol.AgentTypeOrchestration, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create orchestration supervisor: %w", err)
@@ -419,6 +432,7 @@ func runIntakeFlow(cmd *cobra.Command, cfg *config.Config, workspaceRoot string,
 	events := orchSupervisor.Events()
 	heartbeats := orchSupervisor.Heartbeats()
 	logs := orchSupervisor.Logs()
+	stderrLines := orchSupervisor.StderrLines()
 
 	var heartbeatTimer *time.Timer
 	var heartbeatTimeout time.Duration
@@ -708,6 +722,18 @@ func runIntakeFlow(cmd *cobra.Command, cfg *config.Config, workspaceRoot string,
 			}
 			fmt.Fprintln(outputWriter, formatter.FormatLog(logMsg))
 
+		case stderrLine, ok := <-stderrLines:
+			if !ok {
+				stderrLines = nil
+				continue
+			}
+			// Prefix stderr output to distinguish it from lorch output
+			prefixed := fmt.Sprintf("[lorch→orchestration] %s", stderrLine)
+			fmt.Fprintln(outputWriter, prefixed)
+
+			// Also write to stderr log file
+			fmt.Fprintln(stderrLogFile, stderrLine)
+
 		case <-heartbeatCh:
 			if heartbeatTimer == nil {
 				continue
@@ -835,7 +861,7 @@ func executeApprovedTasks(
 	defer evtLog.Close()
 
 	// Set up execution environment
-	env, err := setupExecutionEnvironment(ctx, cfg, workspaceRoot, snapshotID, evtLog, logger)
+	env, err := setupExecutionEnvironment(ctx, cfg, workspaceRoot, snapshotID, runID, evtLog, outputWriter, logger)
 	if err != nil {
 		return fmt.Errorf("failed to setup execution environment: %w", err)
 	}
@@ -1560,6 +1586,44 @@ type executionEnvironment struct {
 	cleanup   func()
 }
 
+// startAgentStderrConsumer starts a goroutine to consume and display stderr from an agent
+func startAgentStderrConsumer(ctx context.Context, sup *supervisor.AgentSupervisor, agentType protocol.AgentType, workspaceRoot, runID string, outputWriter io.Writer) error {
+	// Create stderr log file for this agent - follows spec structure: /logs/<agent>/<run_id>
+	agentLogDir := filepath.Join(workspaceRoot, "logs", string(agentType))
+	stderrLogPath := filepath.Join(agentLogDir, fmt.Sprintf("%s-stderr.log", runID))
+	if err := os.MkdirAll(agentLogDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create agent log directory: %w", err)
+	}
+	stderrLogFile, err := os.Create(stderrLogPath)
+	if err != nil {
+		return fmt.Errorf("failed to create stderr log file: %w", err)
+	}
+
+	// Start goroutine to consume stderr
+	go func() {
+		defer stderrLogFile.Close()
+		stderrLines := sup.StderrLines()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case line, ok := <-stderrLines:
+				if !ok {
+					return
+				}
+				// Prefix stderr output to distinguish it
+				prefixed := fmt.Sprintf("[lorch→%s] %s", agentType, line)
+				fmt.Fprintln(outputWriter, prefixed)
+
+				// Also write to stderr log file
+				fmt.Fprintln(stderrLogFile, line)
+			}
+		}
+	}()
+
+	return nil
+}
+
 // setupExecutionEnvironment creates agents, scheduler, and returns a cleanup function.
 // This is used by both --task mode and P2.4 intake-derived task execution.
 func setupExecutionEnvironment(
@@ -1567,7 +1631,9 @@ func setupExecutionEnvironment(
 	cfg *config.Config,
 	workspaceRoot string,
 	snapshotID string,
+	runID string,
 	eventLog *eventlog.EventLog,
+	outputWriter io.Writer,
 	logger *slog.Logger,
 ) (*executionEnvironment, error) {
 	// Create agent supervisors
@@ -1603,16 +1669,31 @@ func setupExecutionEnvironment(
 	if err := builder.Start(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start builder: %w", err)
 	}
+	if err := startAgentStderrConsumer(ctx, builder, protocol.AgentTypeBuilder, workspaceRoot, runID, outputWriter); err != nil {
+		builder.Stop(context.Background())
+		return nil, fmt.Errorf("failed to start builder stderr consumer: %w", err)
+	}
 
 	if err := reviewer.Start(ctx); err != nil {
 		builder.Stop(context.Background())
 		return nil, fmt.Errorf("failed to start reviewer: %w", err)
+	}
+	if err := startAgentStderrConsumer(ctx, reviewer, protocol.AgentTypeReviewer, workspaceRoot, runID, outputWriter); err != nil {
+		builder.Stop(context.Background())
+		reviewer.Stop(context.Background())
+		return nil, fmt.Errorf("failed to start reviewer stderr consumer: %w", err)
 	}
 
 	if err := specMaintainer.Start(ctx); err != nil {
 		builder.Stop(context.Background())
 		reviewer.Stop(context.Background())
 		return nil, fmt.Errorf("failed to start spec maintainer: %w", err)
+	}
+	if err := startAgentStderrConsumer(ctx, specMaintainer, protocol.AgentTypeSpecMaintainer, workspaceRoot, runID, outputWriter); err != nil {
+		builder.Stop(context.Background())
+		reviewer.Stop(context.Background())
+		specMaintainer.Stop(context.Background())
+		return nil, fmt.Errorf("failed to start spec maintainer stderr consumer: %w", err)
 	}
 
 	// Create scheduler
