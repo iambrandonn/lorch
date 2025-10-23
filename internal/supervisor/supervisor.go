@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ type AgentSupervisor struct {
 	stderr        io.ReadCloser
 	running       bool
 	lastHeartbeat time.Time
+	exitChan      chan error // Receives the result of proc.Wait() from waitForExit
 
 	// Channels for messages
 	events     chan *protocol.Event
@@ -68,7 +70,8 @@ func (s *AgentSupervisor) Start(ctx context.Context) error {
 	// Create command
 	proc := exec.CommandContext(ctx, s.cmd[0], s.cmd[1:]...)
 
-	// Set environment
+	// Set environment - inherit parent environment first, then add custom vars
+	proc.Env = os.Environ()
 	proc.Env = append(proc.Env, fmt.Sprintf("AGENT_TYPE=%s", s.agentType))
 	for k, v := range s.env {
 		proc.Env = append(proc.Env, fmt.Sprintf("%s=%s", k, v))
@@ -110,6 +113,7 @@ func (s *AgentSupervisor) Start(ctx context.Context) error {
 	s.decoder = ndjson.NewDecoder(stdout, s.logger)
 	s.running = true
 	s.lastHeartbeat = time.Now()
+	s.exitChan = make(chan error, 1) // Buffered to prevent goroutine leak
 	s.mu.Unlock()
 
 	s.logger.Info("agent started", "type", s.agentType, "pid", proc.Process.Pid)
@@ -132,6 +136,7 @@ func (s *AgentSupervisor) Stop(ctx context.Context) error {
 
 	proc := s.process
 	stdin := s.stdin
+	exitChan := s.exitChan
 	s.mu.Unlock()
 
 	s.logger.Info("stopping agent", "type", s.agentType)
@@ -141,12 +146,8 @@ func (s *AgentSupervisor) Stop(ctx context.Context) error {
 		stdin.Close()
 	}
 
-	// Wait for process to exit (with timeout)
-	done := make(chan error, 1)
-	go func() {
-		done <- proc.Wait()
-	}()
-
+	// Wait for process to exit via the waitForExit goroutine (with timeout)
+	// Don't call proc.Wait() here - waitForExit already does that
 	select {
 	case <-ctx.Done():
 		// Context cancelled, force kill
@@ -154,11 +155,8 @@ func (s *AgentSupervisor) Stop(ctx context.Context) error {
 			proc.Process.Kill()
 		}
 		return ctx.Err()
-	case err := <-done:
-		s.mu.Lock()
-		s.running = false
-		s.mu.Unlock()
-
+	case err := <-exitChan:
+		// Process exited - waitForExit already set running=false
 		if err != nil {
 			s.logger.Warn("agent exited with error", "type", s.agentType, "error", err)
 		} else {
@@ -324,6 +322,7 @@ func (s *AgentSupervisor) readStderr(ctx context.Context) {
 func (s *AgentSupervisor) waitForExit(ctx context.Context) {
 	s.mu.Lock()
 	proc := s.process
+	exitChan := s.exitChan
 	s.mu.Unlock()
 
 	if proc == nil {
@@ -335,6 +334,11 @@ func (s *AgentSupervisor) waitForExit(ctx context.Context) {
 	s.mu.Lock()
 	s.running = false
 	s.mu.Unlock()
+
+	// Send the exit result to the channel for Stop() to receive
+	if exitChan != nil {
+		exitChan <- err
+	}
 
 	if err != nil {
 		s.logger.Warn("agent process exited",
